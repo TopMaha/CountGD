@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#0b1220" />
+<title>CountGD — นับชิ้นงานจากกล้อง</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<style>
+  :root{
+    --bg:#0b1220; --panel:#121c2e; --panel2:#1a2740; --line:#243352;
+    --txt:#e8eefc; --muted:#93a4c4; --accent:#3b82f6; --accent2:#22d3ee;
+    --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --radius:16px;
+    --safe-b: env(safe-area-inset-bottom,0px);
+    --safe-t: env(safe-area-inset-top,0px);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans Thai",sans-serif;
+    overscroll-behavior:none;}
+  body{display:flex;flex-direction:column;height:100dvh;overflow:hidden}
+  button{font-family:inherit;cursor:pointer;border:none;color:inherit}
+  .hidden{display:none!important}
+
+  /* ---------- Top bar ---------- */
+  header{display:flex;align-items:center;gap:10px;padding:calc(10px + var(--safe-t)) 14px 10px;
+    background:linear-gradient(180deg,#0e1830,#0b1220);border-bottom:1px solid var(--line);z-index:20}
+  header .logo{font-weight:800;font-size:18px;letter-spacing:.3px}
+  header .logo span{color:var(--accent2)}
+  header .sub{font-size:11px;color:var(--muted);margin-left:auto}
+
+  /* ---------- Screens ---------- */
+  main{flex:1;position:relative;overflow:hidden}
+  .screen{position:absolute;inset:0;display:none;flex-direction:column;overflow:hidden}
+  .screen.active{display:flex}
+  .scroll{overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px;padding-bottom:90px}
+
+  /* ---------- Home ---------- */
+  .hero{padding:18px 16px}
+  .hero h1{font-size:22px;margin:0 0 4px}
+  .hero p{color:var(--muted);font-size:13px;margin:0;line-height:1.5}
+  .cards{display:grid;gap:14px;padding:8px 16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:18px;display:flex;gap:14px;align-items:center;transition:.15s;text-align:left;width:100%}
+  .card:active{transform:scale(.985);background:var(--panel2)}
+  .card .ic{font-size:30px;width:54px;height:54px;display:grid;place-items:center;
+    background:var(--panel2);border-radius:14px;flex:none}
+  .card h3{margin:0 0 3px;font-size:16px}
+  .card p{margin:0;font-size:12px;color:var(--muted);line-height:1.45}
+  .card .chev{margin-left:auto;color:var(--muted);font-size:20px}
+  .home-foot{padding:10px 16px;color:var(--muted);font-size:11px;text-align:center}
+
+  /* ---------- Camera / canvas stage ---------- */
+  .stage{position:relative;flex:1;background:#000;overflow:hidden;display:flex}
+  .stage video,.stage canvas,.stage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+  #liveVideo{object-fit:cover}
+  .overlay-canvas{pointer-events:none}
+  .draw-canvas{pointer-events:auto;touch-action:none}
+
+  /* count HUD */
+  .hud{position:absolute;top:14px;left:14px;right:14px;display:flex;align-items:flex-start;
+    gap:10px;pointer-events:none;z-index:5}
+  .countbox{background:rgba(7,12,22,.72);backdrop-filter:blur(8px);border:1px solid var(--line);
+    border-radius:14px;padding:10px 16px;display:flex;flex-direction:column;line-height:1}
+  .countbox .n{font-size:42px;font-weight:800;letter-spacing:1px}
+  .countbox .lbl{font-size:11px;color:var(--muted);margin-top:4px}
+  .status-pill{margin-left:auto;background:rgba(7,12,22,.72);backdrop-filter:blur(8px);
+    border:1px solid var(--line);border-radius:999px;padding:7px 12px;display:flex;align-items:center;
+    gap:7px;font-size:12px;pointer-events:auto}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--muted);transition:.2s}
+  .dot.ok{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  .dot.warn{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+
+  /* bottom controls */
+  .controls{position:absolute;left:0;right:0;bottom:0;padding:12px 14px calc(12px + var(--safe-b));
+    background:linear-gradient(0deg,rgba(7,12,22,.92),rgba(7,12,22,0));z-index:6}
+  .sliders{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+  .slider-row{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted)}
+  .slider-row label{width:78px;flex:none}
+  .slider-row input[type=range]{flex:1;accent-color:var(--accent2)}
+  .slider-row .val{width:46px;text-align:right;color:var(--txt);font-variant-numeric:tabular-nums}
+  .btn-row{display:flex;gap:10px;align-items:center;justify-content:center}
+  .cbtn{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:12px;font-size:13px;display:flex;flex-direction:column;align-items:center;gap:3px;
+    min-width:64px}
+  .cbtn .i{font-size:20px}
+  .cbtn:active{background:var(--panel2)}
+  .cbtn.primary{background:var(--accent);border-color:var(--accent)}
+  .shutter{width:70px;height:70px;border-radius:50%;background:#fff;border:5px solid rgba(255,255,255,.35);
+    flex:none}
+  .shutter:active{transform:scale(.92)}
+
+  /* fab back */
+  .topbtn{position:absolute;z-index:8;background:rgba(7,12,22,.7);backdrop-filter:blur(8px);
+    border:1px solid var(--line);border-radius:12px;padding:9px 12px;font-size:13px;display:flex;
+    align-items:center;gap:6px}
+  .topbtn.back{top:14px;left:14px}
+
+  /* ---------- Annotate ---------- */
+  .annotate-bar{padding:12px 14px;background:var(--panel);border-bottom:1px solid var(--line);
+    display:flex;flex-direction:column;gap:10px}
+  .annotate-bar .row{display:flex;gap:10px;align-items:center}
+  .ex-count{font-size:13px;color:var(--muted)}
+  .ex-count b{color:var(--accent2)}
+  input[type=text],textarea,select{background:var(--panel2);border:1px solid var(--line);
+    color:var(--txt);border-radius:10px;padding:11px 12px;font-size:14px;font-family:inherit;width:100%}
+  .hintbar{font-size:11px;color:var(--muted);line-height:1.4}
+  .toolbtns{display:flex;gap:8px;flex-wrap:wrap}
+  .tbtn{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:12px}
+  .tbtn.on{border-color:var(--accent2);color:var(--accent2)}
+
+  /* bottom action bar */
+  .actionbar{padding:12px 14px calc(12px + var(--safe-b));background:var(--panel);
+    border-top:1px solid var(--line);display:flex;gap:10px}
+  .btn{flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:13px;
+    padding:14px;font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px}
+  .btn:active{transform:scale(.99)}
+  .btn.primary{background:var(--accent);border-color:var(--accent)}
+  .btn.ghost{flex:0 0 auto;padding:14px 16px}
+  .btn:disabled{opacity:.45}
+
+  /* ---------- Results ---------- */
+  .result-head{padding:18px 16px;text-align:center;background:var(--panel);border-bottom:1px solid var(--line)}
+  .result-head .big{font-size:64px;font-weight:800;line-height:1;letter-spacing:1px}
+  .result-head .big small{font-size:18px;color:var(--muted);font-weight:500}
+  .result-head .meta{margin-top:8px;font-size:12px;color:var(--muted)}
+  .conf{display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-size:12px}
+  .conf .bar{width:90px;height:6px;background:var(--panel2);border-radius:99px;overflow:hidden}
+  .conf .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--warn),var(--ok))}
+  .edit-hint{font-size:11px;color:var(--muted);text-align:center;padding:8px}
+
+  /* ---------- Library ---------- */
+  .lib-item{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px;
+    display:flex;gap:12px;align-items:center;margin-bottom:10px}
+  .lib-item img{width:56px;height:56px;border-radius:10px;object-fit:cover;background:#000;flex:none}
+  .lib-item .info{flex:1;min-width:0}
+  .lib-item .info h4{margin:0 0 3px;font-size:14px}
+  .lib-item .info p{margin:0;font-size:11px;color:var(--muted)}
+  .lib-item .del{background:none;color:var(--bad);font-size:18px;padding:8px}
+  .empty{text-align:center;color:var(--muted);padding:40px 20px;font-size:13px}
+
+  /* ---------- toast / loading ---------- */
+  .toast{position:fixed;left:50%;bottom:calc(30px + var(--safe-b));transform:translateX(-50%);
+    background:#0a1426;border:1px solid var(--line);border-radius:12px;padding:12px 18px;font-size:13px;
+    z-index:100;opacity:0;transition:.25s;pointer-events:none;max-width:88%;text-align:center}
+  .toast.show{opacity:1}
+  .loading{position:fixed;inset:0;background:rgba(5,9,18,.86);backdrop-filter:blur(4px);z-index:90;
+    display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px}
+  .loading.show{display:flex}
+  .spinner{width:46px;height:46px;border:4px solid var(--line);border-top-color:var(--accent2);
+    border-radius:50%;animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .loading p{color:var(--muted);font-size:13px}
+
+  /* opencv banner */
+  .cvbanner{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:9;
+    background:rgba(7,12,22,.85);border:1px solid var(--line);border-radius:10px;padding:8px 14px;
+    font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:center}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Count<span>GD</span></div>
+  <div class="sub" id="modeTag">นับชิ้นงาน · on-device</div>
+</header>
+
+<main>
+  <!-- ============ HOME ============ -->
+  <section class="screen active" id="screen-home">
+    <div class="scroll">
+      <div class="hero">
+        <h1>นับชิ้นงานจากกล้อง</h1>
+        <p>นับจำนวนชิ้นงานอะไรก็ได้ — ไม่ต้องเทรนโมเดล แค่วาดกรอบตัวอย่างชิ้นที่ต้องการ ระบบจะหาชิ้นที่เหมือนกันทั้งภาพ</p>
+      </div>
+      <div class="cards">
+        <button class="card" onclick="App.openLive()">
+          <div class="ic">🎥</div>
+          <div><h3>กล้องสด</h3><p>เล็งกล้อง → เห็นเลขนับทันที realtime ไม่ต้องกดถ่าย</p></div>
+          <div class="chev">›</div>
+        </button>
+        <button class="card" onclick="App.openSnapshot()">
+          <div class="ic">📸</div>
+          <div><h3>ถ่ายรูป / อัปโหลด</h3><p>ถ่ายหรือเลือกรูป → วาดกรอบตัวอย่าง → นับแม่นสูงสุด</p></div>
+          <div class="chev">›</div>
+        </button>
+        <button class="card" onclick="App.openLibrary()">
+          <div class="ic">📚</div>
+          <div><h3>คลังชิ้นงาน</h3><p>ชิ้นงานที่บันทึกไว้ ใช้ซ้ำได้โดยไม่ต้องวาดใหม่</p></div>
+          <div class="chev">›</div>
+        </button>
+      </div>
+      <div class="home-foot">เคล็ดลับ: ถ่ายจากด้านบน (top-down) แสงสม่ำเสมอ พื้นหลังสีตัดกับชิ้นงาน จะนับแม่นที่สุด</div>
+    </div>
+  </section>
+
+  <!-- ============ LIVE ============ -->
+  <section class="screen" id="screen-live">
+    <div class="stage">
+      <video id="liveVideo" playsinline muted autoplay></video>
+      <canvas id="liveOverlay" class="overlay-canvas"></canvas>
+
+      <button class="topbtn back" onclick="App.exitLive()">‹ กลับ</button>
+
+      <div class="hud">
+        <div class="countbox">
+          <div class="n" id="liveCount">0</div>
+          <div class="lbl">ชิ้น (สด)</div>
+        </div>
+        <div class="status-pill">
+          <span class="dot" id="liveDot"></span>
+          <span id="liveStatus">กำลังเปิดกล้อง…</span>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="sliders" id="liveSliders">
+          <div class="slider-row">
+            <label>ความไว</label>
+            <input type="range" id="sThresh" min="0" max="255" value="60">
+            <span class="val" id="vThresh">60</span>
+          </div>
+          <div class="slider-row">
+            <label>ขนาดต่ำสุด</label>
+            <input type="range" id="sMin" min="2" max="400" value="30">
+            <span class="val" id="vMin">30</span>
+          </div>
+          <div class="slider-row">
+            <label>ขนาดสูงสุด</label>
+            <input type="range" id="sMax" min="500" max="60000" value="20000">
+            <span class="val" id="vMax">20k</span>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="cbtn" onclick="App.toggleLiveSliders()"><span class="i">⚙️</span>ตั้งค่า</button>
+          <button class="cbtn" onclick="App.flipCamera()"><span class="i">🔄</span>สลับกล้อง</button>
+          <button class="shutter" onclick="App.verifyLive()" title="ยืนยันนับ"></button>
+          <button class="cbtn" onclick="App.toggleLiveColor()"><span class="i" id="colorIcon">⚫</span><span id="colorLbl">โหมดสี</span></button>
+          <button class="cbtn primary" onclick="App.verifyLive()"><span class="i">✓</span>ยืนยัน</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ANNOTATE (snapshot) ============ -->
+  <section class="screen" id="screen-annotate">
+    <div class="annotate-bar">
+      <div class="row">
+        <button class="topbtn" style="position:static" onclick="App.backToHome()">‹ กลับ</button>
+        <div class="ex-count">กรอบตัวอย่าง: <b id="exCount">0</b> / 5</div>
+        <div class="toolbtns" style="margin-left:auto">
+          <button class="tbtn" id="toolDraw" onclick="App.setTool('draw')">✏️ วาด</button>
+          <button class="tbtn" id="toolErase" onclick="App.setTool('erase')">🗑️ ลบ</button>
+        </div>
+      </div>
+      <div class="hintbar">ลากกรอบรอบชิ้นงาน 1–5 ชิ้น เลือกชิ้นที่ขนาด/มุมต่างกัน เพื่อให้ระบบจับชิ้นที่เหมือนได้แม่นขึ้น</div>
+    </div>
+    <div class="stage">
+      <img id="annImg" alt="">
+      <canvas id="annCanvas" class="draw-canvas"></canvas>
+    </div>
+    <div class="annotate-bar" style="border-top:1px solid var(--line);border-bottom:none">
+      <input type="text" id="partDesc" placeholder="คำอธิบายชิ้นงาน (เช่น น็อตหกเหลี่ยม, แผ่นเหล็ก)">
+    </div>
+    <div class="actionbar">
+      <button class="btn ghost" onclick="App.clearExemplars()">ล้าง</button>
+      <button class="btn primary" id="btnCount" onclick="App.runCount()" disabled>นับชิ้นงาน</button>
+    </div>
+  </section>
+
+  <!-- ============ RESULTS ============ -->
+  <section class="screen" id="screen-result">
+    <div class="result-head">
+      <div class="big"><span id="resCount">0</span> <small>ชิ้น</small></div>
+      <div class="conf">
+        <span>ความมั่นใจ</span>
+        <span class="bar"><i id="confBar" style="width:0%"></i></span>
+        <span id="confVal">—</span>
+      </div>
+      <div class="meta" id="resMeta"></div>
+    </div>
+    <div class="stage" style="background:#0b1220">
+      <canvas id="resCanvas" class="draw-canvas"></canvas>
+    </div>
+    <div class="edit-hint">แตะที่รูป: เพิ่มจุดที่ตกหล่น (+1) · แตะที่จุดเดิมเพื่อลบ (−1)</div>
+    <div class="annotate-bar" style="border-bottom:none">
+      <div class="slider-row" style="color:var(--muted)">
+        <label style="width:90px">เกณฑ์ความมั่นใจ</label>
+        <input type="range" id="resThresh" min="0" max="100" value="35">
+        <span class="val" id="resThreshV">0.35</span>
+      </div>
+    </div>
+    <div class="actionbar">
+      <button class="btn ghost" onclick="App.backToHome()">เสร็จ</button>
+      <button class="btn" onclick="App.saveToLibrary()">💾 บันทึก</button>
+      <button class="btn primary" onclick="App.exportResult()">⬇️ Export</button>
+    </div>
+  </section>
+
+  <!-- ============ LIBRARY ============ -->
+  <section class="screen" id="screen-library">
+    <div class="annotate-bar">
+      <div class="row">
+        <button class="topbtn" style="position:static" onclick="App.backToHome()">‹ กลับ</button>
+        <div class="logo" style="font-size:16px">คลังชิ้นงาน</div>
+      </div>
+    </div>
+    <div class="scroll" id="libList"></div>
+  </section>
+</main>
+
+<div class="loading" id="loading"><div class="spinner"></div><p id="loadingTxt">กำลังนับ…</p></div>
+<div class="toast" id="toast"></div>
+
+<!-- hidden file input -->
+<input type="file" id="fileInput" accept="image/*" capture="environment" class="hidden">
+
+<script src="app.js"></script>
+</body>
+</html>

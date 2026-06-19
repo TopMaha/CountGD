@@ -1,0 +1,18 @@
+{
+  "name": "countgd-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CountGD API orchestrator — stores jobs/exemplars in D1/R2 and proxies verify requests to a CountGD GPU endpoint",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute countgd --file=./schema.sql",
+    "db:init:remote": "wrangler d1 execute countgd --remote --file=./schema.sql"
+  },
+  "dependencies": {
+    "hono": "^4.6.3"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
