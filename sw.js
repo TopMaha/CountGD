@@ -1,5 +1,5 @@
 /* CountGD service worker — offline app shell + cached OpenCV runtime */
-const CACHE = 'countgd-v1';
+const CACHE = 'countgd-v2';
 const SHELL = [
   './',
   './index.html',

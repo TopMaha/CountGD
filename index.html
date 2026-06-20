@@ -75,6 +75,15 @@
   .dot.ok{background:var(--ok);box-shadow:0 0 8px var(--ok)}
   .dot.warn{background:var(--warn);box-shadow:0 0 8px var(--warn)}
 
+  /* target chip — which part is being counted */
+  .target-chip{position:absolute;top:84px;left:14px;z-index:6;display:flex;align-items:center;gap:8px;
+    background:rgba(7,12,22,.78);backdrop-filter:blur(8px);border:1px solid var(--warn);
+    border-radius:999px;padding:6px 8px 6px 10px;font-size:13px}
+  .target-chip .swatch{width:18px;height:18px;border-radius:5px;border:1px solid rgba(255,255,255,.5);flex:none}
+  .target-chip .clear-x{background:rgba(255,255,255,.12);border-radius:50%;width:22px;height:22px;
+    display:grid;place-items:center;font-size:12px;line-height:1}
+  .cbtn.on{background:var(--accent);border-color:var(--accent)}
+
   /* bottom controls */
   .controls{position:absolute;left:0;right:0;bottom:0;padding:12px 14px calc(12px + var(--safe-b));
     background:linear-gradient(0deg,rgba(7,12,22,.92),rgba(7,12,22,0));z-index:6}
@@ -208,7 +217,7 @@
 
       <div class="hud">
         <div class="countbox">
-          <div class="n" id="liveCount">0</div>
+          <div class="n" id="liveCount">—</div>
           <div class="lbl">ชิ้น (สด)</div>
         </div>
         <div class="status-pill">
@@ -217,29 +226,36 @@
         </div>
       </div>
 
+      <!-- which part are we counting -->
+      <div class="target-chip hidden" id="targetChip">
+        <span class="swatch" id="targetSwatch"></span>
+        <span id="targetLabel">นับชิ้นสีนี้</span>
+        <button class="clear-x" onclick="App.clearTarget()">✕</button>
+      </div>
+
       <div class="controls">
-        <div class="sliders" id="liveSliders">
+        <div class="sliders hidden" id="liveSliders">
           <div class="slider-row">
-            <label>ความไว</label>
-            <input type="range" id="sThresh" min="0" max="255" value="60">
-            <span class="val" id="vThresh">60</span>
+            <label>ความไวสี</label>
+            <input type="range" id="sThresh" min="0" max="100" value="35">
+            <span class="val" id="vThresh">35</span>
           </div>
           <div class="slider-row">
             <label>ขนาดต่ำสุด</label>
-            <input type="range" id="sMin" min="2" max="400" value="30">
-            <span class="val" id="vMin">30</span>
+            <input type="range" id="sMin" min="2" max="400" value="20">
+            <span class="val" id="vMin">20</span>
           </div>
           <div class="slider-row">
             <label>ขนาดสูงสุด</label>
-            <input type="range" id="sMax" min="500" max="60000" value="20000">
-            <span class="val" id="vMax">20k</span>
+            <input type="range" id="sMax" min="500" max="60000" value="30000">
+            <span class="val" id="vMax">30k</span>
           </div>
         </div>
         <div class="btn-row">
           <button class="cbtn" onclick="App.toggleLiveSliders()"><span class="i">⚙️</span>ตั้งค่า</button>
           <button class="cbtn" onclick="App.flipCamera()"><span class="i">🔄</span>สลับกล้อง</button>
           <button class="shutter" onclick="App.verifyLive()" title="ยืนยันนับ"></button>
-          <button class="cbtn" onclick="App.toggleLiveColor()"><span class="i" id="colorIcon">⚫</span><span id="colorLbl">โหมดสี</span></button>
+          <button class="cbtn" id="countAllBtn" onclick="App.toggleCountAll()"><span class="i">▦</span>นับทั้งหมด</button>
           <button class="cbtn primary" onclick="App.verifyLive()"><span class="i">✓</span>ยืนยัน</button>
         </div>
       </div>

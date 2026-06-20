@@ -21,8 +21,9 @@ const App = (() => {
   let stream = null;
   let facing = 'environment';
   let rafId = null;
-  let liveColorMode = false;     // false = grayscale contrast, true = sample color
-  let sampleColor = null;        // {h,s,v} when user taps in color mode
+  let liveTarget = null;         // {h,s,v,isGray,areaFrac} — set by tapping a part
+  let countAll = false;          // fallback: count every contrasting blob
+  let lastTapDisp = null;        // {x,y} in display coords for the target marker
 
   // live smoothing / motion
   let countBuf = [];
@@ -100,8 +101,12 @@ const App = (() => {
       const v = $('liveVideo');
       v.srcObject = stream;
       await v.play();
-      $('liveStatus').textContent = cvReady ? 'กำลังนับ…' : 'กำลังโหลดเครื่องนับ…';
       countBuf = []; prevGray = null; stillSince = 0;
+      // tap-to-select-target is the primary interaction in live mode
+      const ov = $('liveOverlay');
+      ov.style.pointerEvents = 'auto';
+      ov.onclick = onLiveTap;
+      updateTargetUI();
       loopLive();
     } catch (e) {
       $('liveStatus').textContent = 'เปิดกล้องไม่ได้';
@@ -142,20 +147,27 @@ const App = (() => {
       proc.width = pw; proc.height = ph;
       procCtx.drawImage(v, 0, 0, pw, ph);
 
+      const active = !!liveTarget || countAll;   // nothing selected yet → don't count
+
       let detections = [];
-      try {
-        detections = detectBlobs(procCtx, pw, ph, liveParams());
-      } catch (e) { /* opencv can throw transiently */ }
+      if (active) {
+        try { detections = detectLive(procCtx, pw, ph); }
+        catch (e) { /* opencv can throw transiently */ }
+      }
 
       // motion detection
       const motion = computeMotion(procCtx, pw, ph);
       const still = motion >= 0 && motion < CONFIG.MOTION_THRESH;
-      updateStatus(still);
+      updateStatus(still, active);
 
-      // temporal smoothing of count
-      pushCount(detections.length);
-      const smooth = medianCount();
-      $('liveCount').textContent = smooth;
+      if (active) {
+        // temporal smoothing of count
+        pushCount(detections.length);
+        $('liveCount').textContent = medianCount();
+      } else {
+        countBuf = [];
+        $('liveCount').textContent = '—';
+      }
 
       drawLiveOverlay(overlay, detections, v.videoWidth, v.videoHeight, dispW, dispH, still);
 
@@ -172,14 +184,37 @@ const App = (() => {
     rafId = requestAnimationFrame(loopLive);
   }
 
-  function liveParams() {
-    return {
-      thresh: +$('sThresh').value,
-      minArea: +$('sMin').value,
-      maxArea: +$('sMax').value,
-      colorMode: liveColorMode,
-      sampleColor,
-    };
+  // color tolerance from the "ความไวสี" slider (0-100)
+  function colorTol() {
+    const t = +$('sThresh').value;             // 0..100
+    return { dH: 6 + t * 0.45, dV: 18 + t * 1.1, sMin: Math.max(25, 90 - t) };
+  }
+
+  // build a binary mask of pixels matching the target color (RGBA mat → mask)
+  function maskFromTarget(srcRGBA, target) {
+    let hsv = new cv.Mat();
+    cv.cvtColor(srcRGBA, hsv, cv.COLOR_RGBA2RGB);
+    cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
+    const t = colorTol();
+    let mask = new cv.Mat();
+    let lo, hi;
+    if (target.isGray) {
+      // low-saturation parts (metal / white / black): match by brightness band
+      lo = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 0, Math.max(0, target.v - t.dV), 0]);
+      hi = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [179, 70, Math.min(255, target.v + t.dV), 255]);
+    } else {
+      lo = new cv.Mat(hsv.rows, hsv.cols, hsv.type(),
+        [Math.max(0, target.h - t.dH), t.sMin, Math.max(30, target.v - t.dV - 20), 0]);
+      hi = new cv.Mat(hsv.rows, hsv.cols, hsv.type(),
+        [Math.min(179, target.h + t.dH), 255, 255, 255]);
+    }
+    cv.inRange(hsv, lo, hi, mask);
+    hsv.delete(); lo.delete(); hi.delete();
+    let k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
+    cv.morphologyEx(mask, mask, cv.MORPH_OPEN, k);
+    cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, k);
+    k.delete();
+    return mask;
   }
 
   function pushCount(n) { countBuf.push(n); if (countBuf.length > CONFIG.SMOOTH_FRAMES) countBuf.shift(); }
@@ -207,9 +242,10 @@ const App = (() => {
     return m;
   }
 
-  function updateStatus(still) {
+  function updateStatus(still, active) {
     const dot = $('liveDot'), st = $('liveStatus');
-    if (!cvReady) { dot.className = 'dot'; st.textContent = 'กำลังโหลด…'; return; }
+    if (!cvReady) { dot.className = 'dot'; st.textContent = 'กำลังโหลดเครื่องนับ…'; return; }
+    if (!active) { dot.className = 'dot'; st.textContent = 'แตะที่ชิ้นงานที่จะนับ'; return; }
     if (still) { dot.className = 'dot ok'; st.textContent = 'ภาพนิ่ง · พร้อมยืนยัน'; }
     else { dot.className = 'dot warn'; st.textContent = 'ขยับอยู่…'; }
   }
@@ -219,18 +255,31 @@ const App = (() => {
     ctx.clearRect(0, 0, dw, dh);
     // map proc-space coords (pw x ph) → video space → cover-fit display
     const pw = proc.width, ph = proc.height;
-    // video is object-fit:cover → compute scale + crop offset
     const scale = Math.max(dw / vw, dh / vh);
     const offX = (dw - vw * scale) / 2, offY = (dh - vh * scale) / 2;
-    const sx = vw / pw, sy = vh / ph;
+    const fx = (vw / pw) * scale, fy = (vh / ph) * scale;   // proc-px → display-px
     ctx.lineWidth = 2;
     ctx.strokeStyle = still ? '#22c55e' : '#22d3ee';
-    ctx.fillStyle = still ? 'rgba(34,197,94,.18)' : 'rgba(34,211,238,.15)';
+    ctx.fillStyle = still ? 'rgba(34,197,94,.22)' : 'rgba(34,211,238,.18)';
     for (const d of dets) {
-      const cx = (d.x * sx) * scale + offX;
-      const cy = (d.y * sy) * scale + offY;
-      const r = Math.max(4, (d.r || 6) * sx * scale);
-      ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fill(); ctx.stroke();
+      const cx = d.x * fx + offX, cy = d.y * fy + offY;
+      if (d.w && d.h) {
+        // draw the actual bounding box so markers cover the whole part
+        const bw = d.w * fx, bh = d.h * fy;
+        ctx.beginPath(); ctx.rect(cx - bw / 2, cy - bh / 2, bw, bh); ctx.fill(); ctx.stroke();
+      } else {
+        const r = Math.max(5, (d.r || 6) * fx);
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fill(); ctx.stroke();
+      }
+    }
+    // target marker (where the user tapped)
+    if (lastTapDisp) {
+      ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(lastTapDisp.x, lastTapDisp.y, 16, 0, 7); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(lastTapDisp.x - 22, lastTapDisp.y); ctx.lineTo(lastTapDisp.x + 22, lastTapDisp.y);
+      ctx.moveTo(lastTapDisp.x, lastTapDisp.y - 22); ctx.lineTo(lastTapDisp.x, lastTapDisp.y + 22);
+      ctx.stroke();
     }
   }
 
@@ -245,38 +294,84 @@ const App = (() => {
     stopLive();
     annImage = await loadImg(dataUrl);
     exemplars = [];                       // live verify: no manual exemplars
-    if (sampleColor) {/* color seed reused inside count */}
     await countNow({ from: 'live' });
   }
 
   function toggleLiveSliders() { $('liveSliders').classList.toggle('hidden'); }
-  function toggleLiveColor() {
-    liveColorMode = !liveColorMode;
-    $('colorIcon').textContent = liveColorMode ? '🎨' : '⚫';
-    $('colorLbl').textContent = liveColorMode ? 'แตะเลือกสี' : 'โหมดสี';
-    toast(liveColorMode ? 'แตะที่ชิ้นงานในจอเพื่อเลือกสีที่จะนับ' : 'กลับสู่โหมดความต่างของแสง');
-    if (liveColorMode) {
-      $('liveOverlay').style.pointerEvents = 'auto';
-      $('liveOverlay').onclick = onLiveTapColor;
+
+  function toggleCountAll() {
+    countAll = !countAll;
+    if (countAll) { liveTarget = null; lastTapDisp = null; }
+    updateTargetUI();
+    toast(countAll ? 'นับทุกชิ้นที่ตัดกับพื้นหลัง (ไม่กรองสี)' : 'แตะที่ชิ้นงานเพื่อเลือกชิ้นที่จะนับ');
+  }
+
+  function clearTarget() {
+    liveTarget = null; lastTapDisp = null; countAll = false;
+    countBuf = []; updateTargetUI();
+  }
+
+  function updateTargetUI() {
+    const chip = $('targetChip'), sw = $('targetSwatch');
+    const allBtn = $('countAllBtn');
+    if (allBtn) allBtn.classList.toggle('on', countAll);
+    if (!chip) return;
+    if (liveTarget) {
+      chip.classList.remove('hidden');
+      const rgb = hsvToRgb(liveTarget.h, liveTarget.s, liveTarget.v);
+      sw.style.background = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+      $('targetLabel').textContent = liveTarget.isGray ? 'นับชิ้นโทนนี้' : 'นับชิ้นสีนี้';
+    } else if (countAll) {
+      chip.classList.remove('hidden');
+      sw.style.background = 'repeating-linear-gradient(45deg,#888,#888 4px,#bbb 4px,#bbb 8px)';
+      $('targetLabel').textContent = 'นับทั้งหมด';
     } else {
-      sampleColor = null;
-      $('liveOverlay').style.pointerEvents = 'none';
-      $('liveOverlay').onclick = null;
+      chip.classList.add('hidden');
     }
   }
-  function onLiveTapColor(e) {
+
+  // tap a part → sample its color and measure its blob size → count similar parts
+  function onLiveTap(e) {
+    if (!cvReady) { toast('กำลังโหลดเครื่องนับ รอสักครู่'); return; }
     const v = $('liveVideo'), o = $('liveOverlay');
     const rect = o.getBoundingClientRect();
     const dx = e.clientX - rect.left, dy = e.clientY - rect.top;
-    // map display → proc space
+    lastTapDisp = { x: dx, y: dy };
     const dw = rect.width, dh = rect.height, vw = v.videoWidth, vh = v.videoHeight;
     const scale = Math.max(dw / vw, dh / vh);
     const offX = (dw - vw * scale) / 2, offY = (dh - vh * scale) / 2;
-    const vx = (dx - offX) / scale, vy = (dy - offY) / scale;
-    const px = Math.round(vx * proc.width / vw), py = Math.round(vy * proc.height / vh);
-    const d = procCtx.getImageData(Math.max(0,px-1), Math.max(0,py-1), 3, 3).data;
-    sampleColor = rgbToHsv(d[0], d[1], d[2]);
-    toast('เลือกสีแล้ว — กำลังนับเฉพาะชิ้นสีนี้');
+    const px = Math.round(((dx - offX) / scale) * proc.width / vw);
+    const py = Math.round(((dy - offY) / scale) * proc.height / vh);
+    if (px < 0 || py < 0 || px >= proc.width || py >= proc.height) return;
+
+    // median color of a small patch around the tap (robust to noise)
+    const n = 5, x0 = clamp(px - n, 0, proc.width - 2 * n - 1), y0 = clamp(py - n, 0, proc.height - 2 * n - 1);
+    const d = procCtx.getImageData(x0, y0, 2 * n + 1, 2 * n + 1).data;
+    const rs = [], gs = [], bs = [];
+    for (let i = 0; i < d.length; i += 4) { rs.push(d[i]); gs.push(d[i + 1]); bs.push(d[i + 2]); }
+    const hsv = rgbToHsv(median(rs), median(gs), median(bs));
+    countAll = false;
+    liveTarget = { h: hsv.h, s: hsv.s, v: hsv.v, isGray: hsv.s < 45, areaFrac: null };
+
+    // measure the tapped blob's size so we can build an area band
+    try {
+      let src = cv.matFromImageData(procCtx.getImageData(0, 0, proc.width, proc.height));
+      let mask = maskFromTarget(src, liveTarget);
+      let contours = new cv.MatVector(), hier = new cv.Mat();
+      cv.findContours(mask, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      let best = 0;
+      const pt = new cv.Point(px, py);
+      for (let i = 0; i < contours.size(); i++) {
+        const cnt = contours.get(i);
+        if (cv.pointPolygonTest(cnt, pt, false) >= 0) best = cv.contourArea(cnt);
+        cnt.delete();
+      }
+      if (best > 0) liveTarget.areaFrac = best / (proc.width * proc.height);
+      src.delete(); mask.delete(); contours.delete(); hier.delete();
+    } catch (e) { /* keep null → area from sliders */ }
+
+    countBuf = []; updateTargetUI();
+    toast('เลือกแล้ว — นับเฉพาะชิ้นที่เหมือน (แตะใหม่เพื่อเปลี่ยน)');
   }
 
   /* ================================================================
@@ -449,8 +544,26 @@ const App = (() => {
     };
   }
 
-  // derive size band + color range from drawn exemplars (or defaults)
+  // derive size band + color range from drawn exemplars (or live target / defaults)
   function deriveParams(src) {
+    // live verify: reuse the tapped target so the high-res count also filters by color/size
+    if (!exemplars.length && liveTarget) {
+      const t = colorTol();
+      const px = src.cols * src.rows;
+      const a = liveTarget.areaFrac ? liveTarget.areaFrac * px : null;
+      const lo = liveTarget.isGray
+        ? [0, 0, Math.max(0, liveTarget.v - t.dV)]
+        : [Math.max(0, liveTarget.h - t.dH), t.sMin, Math.max(30, liveTarget.v - t.dV - 20)];
+      const hi = liveTarget.isGray
+        ? [179, 70, Math.min(255, liveTarget.v + t.dV)]
+        : [Math.min(179, liveTarget.h + t.dH), 255, 255];
+      return {
+        minArea: a ? a * 0.35 : px * 0.00003,
+        maxArea: a ? a * 3.0 : px * 0.02,
+        useColor: true, color: { h: liveTarget.h, s: liveTarget.s, v: liveTarget.v },
+        hsv: { lo, hi },
+      };
+    }
     if (!exemplars.length) {
       // automatic: use sliders defaults scaled to image, no color filter
       const px = src.cols * src.rows;
@@ -533,40 +646,46 @@ const App = (() => {
   }
 
   // live-mode blob detection (from procCtx ImageData)
-  function detectBlobs(ctx, w, h, p) {
+  // live-mode detection: count parts matching the tapped target (or all blobs)
+  function detectLive(ctx, w, h) {
     let src = cv.matFromImageData(ctx.getImageData(0, 0, w, h));
-    let mask = new cv.Mat();
-    if (p.colorMode && p.sampleColor) {
-      let hsv = new cv.Mat();
-      cv.cvtColor(src, hsv, cv.COLOR_RGBA2RGB);
-      cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
-      const c = p.sampleColor;
-      let low = new cv.Mat(hsv.rows, hsv.cols, hsv.type(),
-        [Math.max(0, c.h - 18), Math.max(40, c.s - 80), Math.max(40, c.v - 90), 0]);
-      let high = new cv.Mat(hsv.rows, hsv.cols, hsv.type(),
-        [Math.min(179, c.h + 18), 255, 255, 255]);
-      cv.inRange(hsv, low, high, mask);
-      hsv.delete(); low.delete(); high.delete();
+    let mask;
+    let minArea, maxArea;
+    const frameArea = w * h;
+    if (liveTarget) {
+      mask = maskFromTarget(src, liveTarget);
+      if (liveTarget.areaFrac) {
+        const a = liveTarget.areaFrac * frameArea;
+        minArea = a * 0.35; maxArea = a * 3.0;
+      } else {
+        minArea = +$('sMin').value; maxArea = +$('sMax').value;
+      }
     } else {
+      // count-all fallback: adaptive threshold on grayscale
+      mask = new cv.Mat();
       let gray = new cv.Mat();
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
       cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
       cv.adaptiveThreshold(gray, mask, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv.THRESH_BINARY_INV, 25, Math.max(2, (p.thresh / 12) | 0));
-      gray.delete();
+        cv.THRESH_BINARY_INV, 25, 5);
+      let k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
+      cv.morphologyEx(mask, mask, cv.MORPH_OPEN, k);
+      k.delete(); gray.delete();
+      minArea = +$('sMin').value; maxArea = +$('sMax').value;
     }
-    let k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
-    cv.morphologyEx(mask, mask, cv.MORPH_OPEN, k);
-    k.delete();
     let contours = new cv.MatVector(), hier = new cv.Mat();
     cv.findContours(mask, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
     const dets = [];
     for (let i = 0; i < contours.size(); i++) {
       const cnt = contours.get(i);
       const a = cv.contourArea(cnt);
-      if (a >= p.minArea && a <= p.maxArea) {
+      if (a >= minArea && a <= maxArea) {
         const m = cv.moments(cnt);
-        if (m.m00 > 0) dets.push({ x: m.m10 / m.m00, y: m.m01 / m.m00, r: Math.sqrt(a / Math.PI), area: a });
+        const rect = cv.boundingRect(cnt);
+        if (m.m00 > 0) dets.push({
+          x: m.m10 / m.m00, y: m.m01 / m.m00,
+          r: Math.sqrt(a / Math.PI), area: a, w: rect.width, h: rect.height,
+        });
       }
       cnt.delete();
     }
@@ -779,6 +898,16 @@ const App = (() => {
     }
     return { h: h / 2, s: (mx ? d / mx : 0) * 255, v: mx * 255 }; // opencv H is 0-179
   }
+  // opencv HSV (H 0-179, S/V 0-255) → rgb 0-255, for the target swatch
+  function hsvToRgb(h, s, v) {
+    h = h * 2 / 60; s /= 255; v /= 255;
+    const c = v * s, x = c * (1 - Math.abs(h % 2 - 1)), m = v - c;
+    let r = 0, g = 0, b = 0;
+    if (h < 1) [r, g] = [c, x]; else if (h < 2) [r, g] = [x, c];
+    else if (h < 3) [g, b] = [c, x]; else if (h < 4) [g, b] = [x, c];
+    else if (h < 5) [r, b] = [x, c]; else [r, b] = [c, x];
+    return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+  }
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const mean = (a) => a.reduce((s, x) => s + x, 0) / (a.length || 1);
   const median = (a) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
@@ -795,7 +924,8 @@ const App = (() => {
   window.addEventListener('DOMContentLoaded', init);
 
   return {
-    onCvLoad, onCvError, openLive, exitLive, flipCamera, toggleLiveSliders, toggleLiveColor,
+    onCvLoad, onCvError, openLive, exitLive, flipCamera, toggleLiveSliders,
+    toggleCountAll, clearTarget,
     verifyLive, openSnapshot, backToHome, setTool, clearExemplars, runCount,
     exportResult, saveToLibrary, openLibrary, deleteLib,
   };
