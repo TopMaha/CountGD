@@ -539,7 +539,7 @@ const App = (() => {
       detections,
       count: detections.length,
       confidence: estimateConfidence(detections, params),
-      source: exemplars.length ? 'exemplar (on-device)' : 'blob (on-device)',
+      source: exemplars.length ? 'รูปร่าง+สี (on-device)' : 'แยกชิ้น (on-device)',
       params,
     };
   }
@@ -572,13 +572,15 @@ const App = (() => {
     let hsv = new cv.Mat();
     cv.cvtColor(src, hsv, cv.COLOR_RGBA2RGB);
     cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
-    let areas = [], hs = [], ss = [], vs = [];
+    let areas = [], ars = [], exts = [], hs = [], ss = [], vs = [];
     for (const e of exemplars) {
       const x = clamp(Math.round(e.x), 0, src.cols - 1);
       const y = clamp(Math.round(e.y), 0, src.rows - 1);
       const w = clamp(Math.round(e.w), 1, src.cols - x);
       const h = clamp(Math.round(e.h), 1, src.rows - y);
-      areas.push(w * h);
+      // measure the part's silhouette inside the box → shape descriptors
+      const sh = exemplarShape(src, x, y, w, h);
+      areas.push(sh.area); ars.push(sh.ar); exts.push(sh.ext);
       // sample center region color
       const cx = x + w / 2 | 0, cy = y + h / 2 | 0;
       const roi = hsv.roi(new cv.Rect(clamp(cx - w/4|0,0,src.cols-1), clamp(cy - h/4|0,0,src.rows-1),
@@ -588,30 +590,59 @@ const App = (() => {
       roi.delete();
     }
     hsv.delete();
-    const medA = median(areas);
+    const medA = median(areas), medAr = median(ars), medExt = median(exts);
     const mh = median(hs), ms = median(ss), mv = median(vs);
     return {
-      minArea: medA * 0.25,
-      maxArea: medA * 2.5,
+      minArea: medA * 0.4,
+      maxArea: medA * 2.4,
       color: { h: mh, s: ms, v: mv },
       useColor: true,
       hsv: { lo: [Math.max(0, mh - 18), Math.max(20, ms - 70), Math.max(20, mv - 80)],
              hi: [Math.min(179, mh + 18), 255, 255] },
+      // shape gate learned from the exemplars (aspect ratio + how full the box is)
+      shape: {
+        arLo: medAr * 0.6, arHi: medAr * 1.7,
+        extLo: Math.max(0.12, medExt - 0.22), extHi: 1.0,
+      },
     };
   }
 
+  // segment the silhouette of one exemplar box → {area, ar (w/h), ext (fill ratio)}
+  function exemplarShape(src, x, y, w, h) {
+    let fallback = { area: w * h * 0.7, ar: w / h, ext: 0.7 };
+    let roi = src.roi(new cv.Rect(x, y, w, h));
+    let gray = new cv.Mat(), bin = new cv.Mat();
+    cv.cvtColor(roi, gray, cv.COLOR_RGBA2GRAY);
+    cv.threshold(gray, bin, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    // ensure the part (center of the box) is foreground, not the background
+    if (bin.ucharPtr(h >> 1, w >> 1)[0] === 0) cv.bitwise_not(bin, bin);
+    let cs = new cv.MatVector(), hi = new cv.Mat();
+    cv.findContours(bin, cs, hi, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    let bestA = 0, out = fallback;
+    for (let i = 0; i < cs.size(); i++) {
+      const c = cs.get(i), a = cv.contourArea(c);
+      if (a > bestA) {
+        bestA = a;
+        const r = cv.boundingRect(c);
+        out = { area: a, ar: r.width / Math.max(1, r.height), ext: a / Math.max(1, r.width * r.height) };
+      }
+      c.delete();
+    }
+    roi.delete(); gray.delete(); bin.delete(); cs.delete(); hi.delete();
+    return bestA > 0 ? out : fallback;
+  }
+
   function detectFromMat(src, params) {
+    // build a foreground mask: by color when we know the part's color, else by silhouette
     let mask = new cv.Mat();
     if (params.useColor && params.hsv) {
       let hsv = new cv.Mat();
       cv.cvtColor(src, hsv, cv.COLOR_RGBA2RGB);
       cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
-      let lo = cv.matFromArray(1, 3, cv.CV_64F, params.hsv.lo);
-      let hi = cv.matFromArray(1, 3, cv.CV_64F, params.hsv.hi);
       let low = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [params.hsv.lo[0], params.hsv.lo[1], params.hsv.lo[2], 0]);
       let high = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [params.hsv.hi[0], params.hsv.hi[1], params.hsv.hi[2], 255]);
       cv.inRange(hsv, low, high, mask);
-      hsv.delete(); lo.delete(); hi.delete(); low.delete(); high.delete();
+      hsv.delete(); low.delete(); high.delete();
     } else {
       let gray = new cv.Mat();
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
@@ -619,30 +650,86 @@ const App = (() => {
       cv.threshold(gray, mask, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
       gray.delete();
     }
-    // morphology cleanup
+    // split touching parts + filter by shape → count as individual pieces
+    const dets = splitParts(src, mask, params.minArea, params.maxArea, params.shape);
+    mask.delete();
+    return dedup(dets);
+  }
+
+  /* ----------------------------------------------------------------
+     Shared part splitter: from a binary parts-mask, separate touching
+     pieces (distance-transform + watershed) and keep only blobs whose
+     SHAPE matches the exemplar gate. Counts pieces, not color blobs.
+     Returns [{x,y,r,area,w,h}] in mask-pixel coords. Does not free `mask`.
+     ---------------------------------------------------------------- */
+  function splitParts(src, mask, minArea, maxArea, shape) {
+    const dets = [];
     let k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
     cv.morphologyEx(mask, mask, cv.MORPH_OPEN, k);
     cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, k);
-    k.delete();
 
-    let contours = new cv.MatVector(), hier = new cv.Mat();
-    cv.findContours(mask, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-    const dets = [];
-    for (let i = 0; i < contours.size(); i++) {
-      const cnt = contours.get(i);
-      const a = cv.contourArea(cnt);
-      if (a >= params.minArea && a <= params.maxArea) {
-        const m = cv.moments(cnt);
-        if (m.m00 > 0) {
-          const cx = m.m10 / m.m00, cy = m.m01 / m.m00;
-          const r = Math.sqrt(a / Math.PI);
-          dets.push({ x: cx, y: cy, r, area: a, score: 1 });
+    let dist = new cv.Mat(), sureFg = new cv.Mat(), sureBg = new cv.Mat();
+    let unknown = new cv.Mat(), markers = new cv.Mat(), rgb = new cv.Mat(), comp = new cv.Mat();
+    try {
+      // distance transform: each part's interior peaks at its centre
+      cv.distanceTransform(mask, dist, cv.DIST_L2, 5);
+      // Seeds via a per-blob threshold: cut each connected blob at a fraction of
+      // ITS OWN peak distance. Touching parts share a blob but have separate peaks,
+      // so the low-distance ridge between them is dropped → one seed per piece.
+      const nLab = cv.connectedComponents(mask, comp);
+      if (nLab <= 1) return dets;                        // empty mask
+      const cd = comp.data32S, dd = dist.data32F, NP = cd.length;
+      const peak = new Float32Array(nLab);
+      for (let i = 0; i < NP; i++) { const l = cd[i]; if (l > 0 && dd[i] > peak[l]) peak[l] = dd[i]; }
+      sureFg.create(mask.rows, mask.cols, cv.CV_8UC1);
+      sureFg.setTo(new cv.Scalar(0));
+      const sf = sureFg.data, SEED = 0.7;
+      for (let i = 0; i < NP; i++) { const l = cd[i]; if (l > 0 && peak[l] > 0 && dd[i] >= SEED * peak[l]) sf[i] = 255; }
+
+      cv.dilate(mask, sureBg, k, new cv.Point(-1, -1), 3);
+      cv.subtract(sureBg, sureFg, unknown);
+
+      cv.connectedComponents(sureFg, markers);            // bg=0, seeds=1..n
+      let ones = cv.Mat.ones(markers.rows, markers.cols, markers.type());
+      cv.add(markers, ones, markers);                     // bg=1, seeds=2..n+1
+      ones.delete();
+      markers.setTo(new cv.Scalar(0), unknown);           // unknown=0 → watershed fills it
+
+      cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
+      cv.watershed(rgb, markers);                          // grows seeds into full parts
+
+      // one O(pixels) pass: accumulate centroid + bbox per label (label>=2 are parts)
+      const data = markers.data32S, W = markers.cols, H = markers.rows;
+      const acc = new Map();
+      for (let y = 0, idx = 0; y < H; y++) {
+        for (let x = 0; x < W; x++, idx++) {
+          const lab = data[idx];
+          if (lab < 2) continue;
+          let a = acc.get(lab);
+          if (!a) { a = { n: 0, sx: 0, sy: 0, x0: x, x1: x, y0: y, y1: y }; acc.set(lab, a); }
+          a.n++; a.sx += x; a.sy += y;
+          if (x < a.x0) a.x0 = x; if (x > a.x1) a.x1 = x;
+          if (y < a.y0) a.y0 = y; if (y > a.y1) a.y1 = y;
         }
       }
-      cnt.delete();
+      for (const a of acc.values()) {
+        if (a.n < minArea || a.n > maxArea) continue;
+        const bw = a.x1 - a.x0 + 1, bh = a.y1 - a.y0 + 1;
+        if (shape) {
+          const ar = bw / Math.max(1, bh), ext = a.n / Math.max(1, bw * bh);
+          if (ar < shape.arLo || ar > shape.arHi) continue;   // wrong proportions
+          if (ext < shape.extLo || ext > shape.extHi) continue; // wrong fullness
+        }
+        dets.push({
+          x: a.sx / a.n, y: a.sy / a.n, area: a.n,
+          r: Math.sqrt(a.n / Math.PI), w: bw, h: bh, score: 1,
+        });
+      }
+    } finally {
+      k.delete(); dist.delete(); sureFg.delete(); sureBg.delete();
+      unknown.delete(); markers.delete(); rgb.delete(); comp.delete();
     }
-    mask.delete(); contours.delete(); hier.delete();
-    return dedup(dets);
+    return dets;
   }
 
   // live-mode blob detection (from procCtx ImageData)
@@ -673,23 +760,9 @@ const App = (() => {
       k.delete(); gray.delete();
       minArea = +$('sMin').value; maxArea = +$('sMax').value;
     }
-    let contours = new cv.MatVector(), hier = new cv.Mat();
-    cv.findContours(mask, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-    const dets = [];
-    for (let i = 0; i < contours.size(); i++) {
-      const cnt = contours.get(i);
-      const a = cv.contourArea(cnt);
-      if (a >= minArea && a <= maxArea) {
-        const m = cv.moments(cnt);
-        const rect = cv.boundingRect(cnt);
-        if (m.m00 > 0) dets.push({
-          x: m.m10 / m.m00, y: m.m01 / m.m00,
-          r: Math.sqrt(a / Math.PI), area: a, w: rect.width, h: rect.height,
-        });
-      }
-      cnt.delete();
-    }
-    src.delete(); mask.delete(); contours.delete(); hier.delete();
+    // split touching parts so live mode also counts pieces, not merged color blobs
+    const dets = splitParts(src, mask, minArea, maxArea, null);
+    src.delete(); mask.delete();
     return dedup(dets);
   }
 
