@@ -126,10 +126,13 @@
     max-width:84%;line-height:1.4;box-shadow:var(--shadow)}
   .scan-hint b{color:var(--accent)}
   .scan-action{position:absolute;left:0;right:0;bottom:calc(22px + var(--safe-b));z-index:7;
-    display:flex;justify-content:center}
-  .scan-action button{background:var(--accent);color:#fff;border-radius:16px;padding:15px 26px;
-    font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px;box-shadow:var(--shadow-lg)}
+    display:flex;justify-content:center;gap:10px}
+  .scan-action button{border-radius:16px;padding:15px 22px;font-size:16px;font-weight:700;
+    display:flex;align-items:center;gap:8px;box-shadow:var(--shadow-lg)}
+  .scan-action .scan-add{background:var(--accent);color:#fff}
+  .scan-action .scan-done{background:#fff;color:var(--accent);border:1.5px solid var(--accent)}
   .scan-action button:active{transform:scale(.96)}
+  .scan-action .scan-add b{font-variant-numeric:tabular-nums}
 
   /* ---------- Annotate ---------- */
   .annotate-bar{padding:12px 14px;background:var(--panel);border-bottom:1px solid var(--line);
@@ -250,9 +253,10 @@
 
       <!-- scan-a-reference-part mode -->
       <div class="scan-guide hidden" id="scanGuide"></div>
-      <div class="scan-hint hidden" id="scanHint">วางชิ้นงาน <b>1 ชิ้น</b> ให้อยู่กลางกรอบ พื้นหลังสีตัดกัน แล้วกดสแกน</div>
+      <div class="scan-hint hidden" id="scanHint">วางชิ้นงาน <b>1 ชิ้น</b> กลางกรอบ พื้นหลังตัดกัน · เก็บหลายมุม/หลายด้านเพื่อความแม่น แล้วกด “เสร็จ”</div>
       <div class="scan-action hidden" id="scanAction">
-        <button onclick="App.scanPart()"><span style="font-size:18px">🎯</span> สแกนชิ้นนี้</button>
+        <button class="scan-add" onclick="App.scanPart()"><span style="font-size:18px">🎯</span> สแกนมุมนี้ · <b id="scanViews">0</b></button>
+        <button class="scan-done" onclick="App.finishScan()">เสร็จ ✓</button>
       </div>
 
       <div class="hud">

@@ -24,11 +24,16 @@ const App = (() => {
   let liveTarget = null;         // {h,s,v,isGray,areaFrac,shape} — set by tapping or scanning a part
   let countAll = false;          // fallback: count every contrasting blob
   let lastTapDisp = null;        // {x,y} in display coords for the target marker
-  let scanMode = false;          // true while aiming at a single reference part to learn it
-  let template = null;           // the learned reference signature (color+shape+size+thumb)
+  let scanMode = false;          // true while aiming at a reference part to learn it
+  let template = null;           // the learned reference signature (colors+shape+size+thumb)
+  let scanAcc = null;            // multi-view accumulator while scanning
+  let scanViews = 0;             // how many angles captured so far
+  let scanThumb = '';            // thumbnail from the first captured view
 
   // centre guide box used when scanning a reference part (matches .scan-guide CSS)
   const GUIDE = { x: 0.18, y: 0.24, w: 0.64, h: 0.52 };
+  // H-S colour histogram resolution (multi-colour parts → backprojection mask)
+  const HB = 30, SB = 32;
 
   // live smoothing / motion
   let countBuf = [];
@@ -98,12 +103,14 @@ const App = (() => {
     applyScanUI();
   }
 
-  // open the camera aimed at learning ONE reference part
+  // open the camera aimed at learning a reference part from several angles
   async function openScan() {
     scanMode = true;
     liveTarget = null; countAll = false; lastTapDisp = null; countBuf = [];
+    scanAcc = null; scanViews = 0; scanThumb = '';
+    const sv = $('scanViews'); if (sv) sv.textContent = '0';
     show('live');
-    $('modeTag').textContent = 'สแกนชิ้นงานต้นแบบ';
+    $('modeTag').textContent = 'สแกนชิ้นงานต้นแบบ (หลายมุม)';
     await startCamera();
     applyScanUI();
   }
@@ -338,6 +345,7 @@ const App = (() => {
 
   function clearTarget() {
     liveTarget = null; lastTapDisp = null; countAll = false; template = null;
+    scanAcc = null; scanViews = 0;
     countBuf = []; updateTargetUI();
     const b = $('saveTplBtn'); if (b) b.classList.add('hidden');
   }
@@ -349,9 +357,11 @@ const App = (() => {
     if (!chip) return;
     if (liveTarget) {
       chip.classList.remove('hidden');
-      const rgb = hsvToRgb(liveTarget.h, liveTarget.s, liveTarget.v);
+      const col = liveTarget.swatch || liveTarget;
+      const rgb = hsvToRgb(col.h, col.s, col.v);
       sw.style.background = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
-      $('targetLabel').textContent = liveTarget.shape ? 'นับตามต้นแบบ (รูปร่าง+สี)'
+      $('targetLabel').textContent = liveTarget.hist ? 'นับตามต้นแบบ (หลายมุม/หลายสี)'
+        : liveTarget.shape ? 'นับตามต้นแบบ (รูปร่าง+สี)'
         : (liveTarget.isGray ? 'นับชิ้นโทนนี้' : 'นับชิ้นสีนี้');
     } else if (countAll) {
       chip.classList.remove('hidden');
@@ -408,51 +418,82 @@ const App = (() => {
   }
 
   /* ----------------------------------------------------------------
-     Scan a single reference part inside the centre guide box and learn
-     its signature: colour (HSV) + shape (aspect ratio, fill) + size.
-     That signature drives the counter so it counts ONLY this part.
+     Multi-view scan. Capture the reference part from several angles;
+     each view contributes its colours (an H-S histogram — so multi-
+     colour parts are fully covered) plus its shape and size. Counting
+     then uses histogram backprojection + the shape/size ranges, so a
+     part is matched from any side, not by a single flat colour.
      ---------------------------------------------------------------- */
   function scanPart() {
     const v = $('liveVideo');
     if (!cvReady) { toast('กำลังโหลดเครื่องนับ รอสักครู่'); return; }
     if (!v.videoWidth) { toast('กล้องยังไม่พร้อม'); return; }
-    // capture at processing resolution
     const pw = CONFIG.LIVE_PROC_WIDTH;
     const ph = Math.round(pw * v.videoHeight / v.videoWidth);
     proc.width = pw; proc.height = ph;
     procCtx.drawImage(v, 0, 0, pw, ph);
-
     const gx = Math.round(GUIDE.x * pw), gy = Math.round(GUIDE.y * ph);
     const gw = Math.round(GUIDE.w * pw), gh = Math.round(GUIDE.h * ph);
 
-    let sig = null;
+    let view = null;
     try {
       let src = cv.matFromImageData(procCtx.getImageData(0, 0, pw, ph));
-      sig = segmentSignature(src, gx, gy, gw, gh, pw, ph);
+      view = captureView(src, gx, gy, gw, gh, pw, ph);
       src.delete();
-    } catch (e) { /* fall through to error toast */ }
+    } catch (e) { /* fall through */ }
+    if (!view) { toast('ไม่พบชิ้นงานในกรอบ — วางให้ชัด พื้นหลังตัดกัน แล้วลองใหม่'); return; }
 
-    if (!sig) { toast('ไม่พบชิ้นงานในกรอบ — วางให้ชัด พื้นหลังตัดกัน แล้วลองใหม่'); return; }
+    if (!scanAcc) {
+      scanAcc = {
+        hist: view.hist.slice(),
+        arMin: view.ar, arMax: view.ar, extMin: view.ext, extMax: view.ext,
+        afMin: view.areaFrac, afMax: view.areaFrac, swatch: view.swatch,
+      };
+      scanThumb = thumbFromGuide(gx, gy, gw, gh);
+    } else {
+      for (let i = 0; i < scanAcc.hist.length; i++) scanAcc.hist[i] += view.hist[i];
+      scanAcc.arMin = Math.min(scanAcc.arMin, view.ar); scanAcc.arMax = Math.max(scanAcc.arMax, view.ar);
+      scanAcc.extMin = Math.min(scanAcc.extMin, view.ext); scanAcc.extMax = Math.max(scanAcc.extMax, view.ext);
+      scanAcc.afMin = Math.min(scanAcc.afMin, view.areaFrac); scanAcc.afMax = Math.max(scanAcc.afMax, view.areaFrac);
+    }
+    scanViews++;
+    const sv = $('scanViews'); if (sv) sv.textContent = scanViews;
+    toast('เก็บมุมที่ ' + scanViews + ' แล้ว — พลิกชิ้นงานสแกนเพิ่ม หรือกด “เสร็จ”');
+  }
 
-    liveTarget = {
-      h: sig.h, s: sig.s, v: sig.v, isGray: sig.s < 45,
-      areaFrac: sig.areaFrac,
-      // shape gate learned from the reference silhouette
-      shape: {
-        arLo: sig.ar * 0.6, arHi: sig.ar * 1.7,
-        extLo: Math.max(0.12, sig.ext - 0.22), extHi: 1.0,
-      },
+  // finalize the accumulated views into an active counting template
+  function finishScan() {
+    if (!scanAcc || !scanViews) { toast('สแกนชิ้นงานอย่างน้อย 1 มุมก่อน'); return; }
+    let mx = 0; for (const v of scanAcc.hist) if (v > mx) mx = v;
+    const hist = mx > 0 ? Array.from(scanAcc.hist, v => v / mx * 255) : Array.from(scanAcc.hist);
+    const sig = {
+      hist, bins: [HB, SB], swatch: scanAcc.swatch, views: scanViews,
+      arLo: scanAcc.arMin * 0.75, arHi: scanAcc.arMax * 1.3,
+      extLo: Math.max(0.1, scanAcc.extMin - 0.18), extHi: Math.min(1, scanAcc.extMax + 0.06),
+      afLo: scanAcc.afMin, afHi: scanAcc.afMax,
     };
-    template = { sig, thumb: thumbFromGuide(gx, gy, gw, gh), created: Date.now() };
+    liveTarget = targetFromSig(sig);
+    template = { sig, thumb: scanThumb, created: Date.now() };
     countAll = false; lastTapDisp = null; scanMode = false; countBuf = [];
+    scanAcc = null; scanViews = 0;
     applyScanUI();
     updateTargetUI();
     $('saveTplBtn').classList.remove('hidden');
-    toast('เรียนรูปร่าง+สีของชิ้นงานแล้ว — กำลังนับเฉพาะชิ้นที่เหมือน');
+    toast('เรียนชิ้นงานจาก ' + sig.views + ' มุมแล้ว — กำลังนับเฉพาะชิ้นที่เหมือน');
   }
 
-  // segment the dominant part touching the centre of the guide box → signature
-  function segmentSignature(src, gx, gy, gw, gh, fw, fh) {
+  // build the live counting target from a (multi-view) histogram signature
+  function targetFromSig(s) {
+    return {
+      hist: s.hist, bins: s.bins, swatch: s.swatch, isHist: true,
+      areaFracLo: s.afLo, areaFracHi: s.afHi,
+      shape: { arLo: s.arLo, arHi: s.arHi, extLo: s.extLo, extHi: s.extHi },
+    };
+  }
+
+  // segment the dominant part in the guide box and return one view's
+  // {hist (H-S, masked to the silhouette), ar, ext, areaFrac, swatch}
+  function captureView(src, gx, gy, gw, gh, fw, fh) {
     const x = clamp(gx, 0, src.cols - 2), y = clamp(gy, 0, src.rows - 2);
     const w = clamp(gw, 1, src.cols - x), h = clamp(gh, 1, src.rows - y);
     let sub = src.roi(new cv.Rect(x, y, w, h));
@@ -483,17 +524,37 @@ const App = (() => {
       let hsv = new cv.Mat();
       cv.cvtColor(sub, hsv, cv.COLOR_RGBA2RGB);
       cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
+      // colour histogram of the part's pixels (all its colours)
+      let hist = new cv.Mat(), hv = new cv.MatVector(); hv.push_back(hsv);
+      cv.calcHist(hv, [0, 1], m, hist, [HB, SB], [0, 180, 0, 256]);
+      const histData = Float32Array.from(hist.data32F);
       const mn = cv.mean(hsv, m);
       out = {
-        h: mn[0], s: mn[1], v: mn[2],
+        hist: histData, swatch: { h: mn[0], s: mn[1], v: mn[2] },
         ar: r.width / Math.max(1, r.height),
         ext: bestA / Math.max(1, r.width * r.height),
         areaFrac: bestA / (fw * fh),
       };
-      m.delete(); mv.delete(); hsv.delete(); best.delete();
+      m.delete(); mv.delete(); hsv.delete(); hist.delete(); hv.delete(); best.delete();
     }
     sub.delete(); gray.delete(); bin.delete(); cs.delete(); hi.delete();
     return out;
+  }
+
+  // build a parts mask by back-projecting the learned colour histogram —
+  // every colour the part showed during scanning lights up, others don't
+  function maskByHist(srcRGBA, sig) {
+    let hsv = new cv.Mat();
+    cv.cvtColor(srcRGBA, hsv, cv.COLOR_RGBA2RGB);
+    cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
+    let hist = cv.matFromArray(sig.bins[0], sig.bins[1], cv.CV_32F, sig.hist);
+    let bp = new cv.Mat(), hv = new cv.MatVector(); hv.push_back(hsv);
+    cv.calcBackProject(hv, [0, 1], hist, bp, [0, 180, 0, 256], 1);
+    cv.GaussianBlur(bp, bp, new cv.Size(5, 5), 0);
+    let mask = new cv.Mat();
+    cv.threshold(bp, mask, 50, 255, cv.THRESH_BINARY);
+    hsv.delete(); hist.delete(); bp.delete(); hv.delete();
+    return mask;
   }
 
   // small thumbnail of the guide region, for the library card
@@ -671,13 +732,25 @@ const App = (() => {
       count: detections.length,
       confidence: estimateConfidence(detections, params),
       source: exemplars.length ? 'รูปร่าง+สี (on-device)'
-        : (liveTarget && liveTarget.shape ? 'ต้นแบบสแกน (on-device)' : 'แยกชิ้น (on-device)'),
+        : (liveTarget && liveTarget.hist ? 'ต้นแบบหลายมุม (on-device)'
+        : (liveTarget && liveTarget.shape ? 'ต้นแบบสแกน (on-device)' : 'แยกชิ้น (on-device)')),
       params,
     };
   }
 
   // derive size band + color range from drawn exemplars (or live target / defaults)
   function deriveParams(src) {
+    // multi-view scanned template: count by colour-histogram backprojection + shape/size range
+    if (!exemplars.length && liveTarget && liveTarget.hist) {
+      const px = src.cols * src.rows;
+      return {
+        minArea: liveTarget.areaFracLo * px * 0.6,
+        maxArea: liveTarget.areaFracHi * px * 1.6,
+        useColor: false,
+        backproj: { hist: liveTarget.hist, bins: liveTarget.bins },
+        shape: liveTarget.shape || null,
+      };
+    }
     // live verify: reuse the tapped target so the high-res count also filters by color/size
     if (!exemplars.length && liveTarget) {
       const t = colorTol();
@@ -766,9 +839,13 @@ const App = (() => {
   }
 
   function detectFromMat(src, params) {
-    // build a foreground mask: by color when we know the part's color, else by silhouette
-    let mask = new cv.Mat();
-    if (params.useColor && params.hsv) {
+    // build a foreground mask: by learned colour histogram (multi-view scan),
+    // by a single colour band, or by silhouette
+    let mask;
+    if (params.backproj) {
+      mask = maskByHist(src, params.backproj);
+    } else if (params.useColor && params.hsv) {
+      mask = new cv.Mat();
       let hsv = new cv.Mat();
       cv.cvtColor(src, hsv, cv.COLOR_RGBA2RGB);
       cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
@@ -777,6 +854,7 @@ const App = (() => {
       cv.inRange(hsv, low, high, mask);
       hsv.delete(); low.delete(); high.delete();
     } else {
+      mask = new cv.Mat();
       let gray = new cv.Mat();
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
       cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
@@ -873,8 +951,11 @@ const App = (() => {
     let minArea, maxArea;
     const frameArea = w * h;
     if (liveTarget) {
-      mask = maskFromTarget(src, liveTarget);
-      if (liveTarget.areaFrac) {
+      mask = liveTarget.hist ? maskByHist(src, liveTarget) : maskFromTarget(src, liveTarget);
+      if (liveTarget.areaFracLo != null) {
+        minArea = liveTarget.areaFracLo * frameArea * 0.6;
+        maxArea = liveTarget.areaFracHi * frameArea * 1.6;
+      } else if (liveTarget.areaFrac) {
         const a = liveTarget.areaFrac * frameArea;
         minArea = a * 0.35; maxArea = a * 3.0;
       } else {
@@ -1074,7 +1155,8 @@ const App = (() => {
     const it = lib().find(x => x.id === id);
     if (!it || !it.signature) return;
     const s = it.signature;
-    liveTarget = {
+    liveTarget = s.hist ? targetFromSig(s) : {
+      // legacy single-colour template
       h: s.h, s: s.s, v: s.v, isGray: s.s < 45, areaFrac: s.areaFrac,
       shape: { arLo: s.ar * 0.6, arHi: s.ar * 1.7, extLo: Math.max(0.12, s.ext - 0.22), extHi: 1.0 },
     };
@@ -1175,7 +1257,7 @@ const App = (() => {
   return {
     onCvLoad, onCvError, openLive, exitLive, flipCamera, toggleLiveSliders,
     toggleCountAll, clearTarget,
-    openScan, scanPart, saveTemplate, useTemplate,
+    openScan, scanPart, finishScan, saveTemplate, useTemplate,
     verifyLive, openSnapshot, backToHome, setTool, clearExemplars, runCount,
     exportResult, saveToLibrary, openLibrary, deleteLib,
   };
