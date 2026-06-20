@@ -258,9 +258,9 @@ const App = (() => {
     const scale = Math.max(dw / vw, dh / vh);
     const offX = (dw - vw * scale) / 2, offY = (dh - vh * scale) / 2;
     const fx = (vw / pw) * scale, fy = (vh / ph) * scale;   // proc-px → display-px
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = still ? '#22c55e' : '#22d3ee';
-    ctx.fillStyle = still ? 'rgba(34,197,94,.22)' : 'rgba(34,211,238,.18)';
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = still ? '#10b981' : '#2563eb';
+    ctx.fillStyle = still ? 'rgba(16,185,129,.22)' : 'rgba(37,99,235,.20)';
     for (const d of dets) {
       const cx = d.x * fx + offX, cy = d.y * fy + offY;
       if (d.w && d.h) {
@@ -483,13 +483,13 @@ const App = (() => {
     exemplars.forEach((e, i) => {
       const x = e.x * ref.scale + ref.offX, y = e.y * ref.scale + ref.offY;
       const w = e.w * ref.scale, h = e.h * ref.scale;
-      ctx.strokeStyle = '#22d3ee'; ctx.fillStyle = 'rgba(34,211,238,.15)';
+      ctx.strokeStyle = '#2563eb'; ctx.fillStyle = 'rgba(37,99,235,.16)';
       ctx.fillRect(x, y, w, h); ctx.strokeRect(x, y, w, h);
-      ctx.fillStyle = '#22d3ee'; ctx.font = 'bold 13px sans-serif';
+      ctx.fillStyle = '#2563eb'; ctx.font = 'bold 13px sans-serif';
       ctx.fillText(i + 1, x + 4, y + 15);
     });
     if (drawing) {
-      ctx.strokeStyle = '#fff'; ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = '#f59e0b'; ctx.setLineDash([5, 4]);
       ctx.strokeRect(Math.min(drawing.x0, drawing.x1), Math.min(drawing.y0, drawing.y1),
         Math.abs(drawing.x1 - drawing.x0), Math.abs(drawing.y1 - drawing.y0));
       ctx.setLineDash([]);
@@ -770,8 +770,8 @@ const App = (() => {
     visible.forEach((d, i) => {
       const x = d.x * scale + offX, y = d.y * scale + offY;
       const r = Math.max(5, d.r * scale);
-      ctx.strokeStyle = d.manual ? '#f59e0b' : '#22d3ee';
-      ctx.fillStyle = d.manual ? 'rgba(245,158,11,.2)' : 'rgba(34,211,238,.18)';
+      ctx.strokeStyle = d.manual ? '#f59e0b' : '#2563eb';
+      ctx.fillStyle = d.manual ? 'rgba(245,158,11,.22)' : 'rgba(37,99,235,.20)';
       ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); ctx.stroke();
     });
     $('resCount').textContent = visible.length;

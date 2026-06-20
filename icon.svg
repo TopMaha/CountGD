@@ -1,29 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0e1830"/>
-      <stop offset="1" stop-color="#0b1220"/>
-    </linearGradient>
-    <linearGradient id="ac" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3b82f6"/>
-      <stop offset="1" stop-color="#22d3ee"/>
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#0891b2"/>
     </linearGradient>
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
   <!-- camera frame -->
-  <rect x="116" y="150" width="280" height="220" rx="28" fill="none" stroke="url(#ac)" stroke-width="16"/>
+  <rect x="116" y="150" width="280" height="220" rx="28" fill="none" stroke="#ffffff" stroke-width="16"/>
   <!-- corner brackets -->
-  <g stroke="url(#ac)" stroke-width="16" stroke-linecap="round" fill="none">
+  <g stroke="#ffffff" stroke-width="16" stroke-linecap="round" fill="none" opacity=".9">
     <path d="M150 188 v-22 a8 8 0 0 1 8 -8 h22"/>
     <path d="M362 158 h22 a8 8 0 0 1 8 8 v22"/>
     <path d="M392 332 v22 a8 8 0 0 1 -8 8 h-22"/>
     <path d="M180 362 h-22 a8 8 0 0 1 -8 -8 v-22"/>
   </g>
   <!-- counted dots -->
-  <g fill="#22d3ee">
+  <g fill="#ffffff">
     <circle cx="196" cy="232" r="18"/><circle cx="256" cy="218" r="18"/><circle cx="316" cy="236" r="18"/>
     <circle cx="210" cy="300" r="18"/><circle cx="272" cy="296" r="18"/><circle cx="328" cy="304" r="18"/>
   </g>
   <text x="256" y="448" font-family="Arial, sans-serif" font-size="64" font-weight="800"
-        fill="#e8eefc" text-anchor="middle">123</text>
+        fill="#ffffff" text-anchor="middle">123</text>
 </svg>

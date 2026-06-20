@@ -3,18 +3,22 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-<meta name="theme-color" content="#0b1220" />
+<meta name="theme-color" content="#ffffff" />
 <title>CountGD — นับชิ้นงานจากกล้อง</title>
 <link rel="manifest" href="manifest.json" />
 <link rel="icon" href="icon.svg" type="image/svg+xml" />
 <link rel="apple-touch-icon" href="icon-192.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <style>
   :root{
-    --bg:#0b1220; --panel:#121c2e; --panel2:#1a2740; --line:#243352;
-    --txt:#e8eefc; --muted:#93a4c4; --accent:#3b82f6; --accent2:#22d3ee;
-    --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --radius:16px;
+    --bg:#eef2f9; --panel:#ffffff; --panel2:#f1f5fb; --line:#dde5f0;
+    --txt:#1e293b; --muted:#64748b; --accent:#2563eb; --accent2:#0891b2;
+    --ok:#10b981; --warn:#f59e0b; --bad:#ef4444; --radius:16px;
+    --stage:#dfe6f1;
+    --shadow:0 1px 2px rgba(15,23,42,.06), 0 2px 8px rgba(15,23,42,.06);
+    --shadow-lg:0 4px 16px rgba(15,23,42,.12);
+    --glass:rgba(255,255,255,.82);
     --safe-b: env(safe-area-inset-bottom,0px);
     --safe-t: env(safe-area-inset-top,0px);
   }
@@ -27,9 +31,9 @@
   .hidden{display:none!important}
 
   /* ---------- Top bar ---------- */
-  header{display:flex;align-items:center;gap:10px;padding:calc(10px + var(--safe-t)) 14px 10px;
-    background:linear-gradient(180deg,#0e1830,#0b1220);border-bottom:1px solid var(--line);z-index:20}
-  header .logo{font-weight:800;font-size:18px;letter-spacing:.3px}
+  header{display:flex;align-items:center;gap:10px;padding:calc(10px + var(--safe-t)) 16px 10px;
+    background:#fff;border-bottom:1px solid var(--line);z-index:20}
+  header .logo{font-weight:800;font-size:18px;letter-spacing:.3px;color:var(--accent)}
   header .logo span{color:var(--accent2)}
   header .sub{font-size:11px;color:var(--muted);margin-left:auto}
 
@@ -45,17 +49,18 @@
   .hero p{color:var(--muted);font-size:13px;margin:0;line-height:1.5}
   .cards{display:grid;gap:14px;padding:8px 16px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
-    padding:18px;display:flex;gap:14px;align-items:center;transition:.15s;text-align:left;width:100%}
-  .card:active{transform:scale(.985);background:var(--panel2)}
-  .card .ic{font-size:30px;width:54px;height:54px;display:grid;place-items:center;
-    background:var(--panel2);border-radius:14px;flex:none}
+    padding:18px;display:flex;gap:14px;align-items:center;transition:.15s;text-align:left;width:100%;
+    box-shadow:var(--shadow)}
+  .card:active{transform:scale(.985);box-shadow:var(--shadow-lg)}
+  .card .ic{font-size:28px;width:54px;height:54px;display:grid;place-items:center;
+    background:linear-gradient(135deg,#e0ecff,#e9f6fb);border-radius:14px;flex:none}
   .card h3{margin:0 0 3px;font-size:16px}
   .card p{margin:0;font-size:12px;color:var(--muted);line-height:1.45}
   .card .chev{margin-left:auto;color:var(--muted);font-size:20px}
   .home-foot{padding:10px 16px;color:var(--muted);font-size:11px;text-align:center}
 
   /* ---------- Camera / canvas stage ---------- */
-  .stage{position:relative;flex:1;background:#000;overflow:hidden;display:flex}
+  .stage{position:relative;flex:1;background:var(--stage);overflow:hidden;display:flex}
   .stage video,.stage canvas,.stage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
   #liveVideo{object-fit:cover}
   .overlay-canvas{pointer-events:none}
@@ -64,29 +69,30 @@
   /* count HUD */
   .hud{position:absolute;top:14px;left:14px;right:14px;display:flex;align-items:flex-start;
     gap:10px;pointer-events:none;z-index:5}
-  .countbox{background:rgba(7,12,22,.72);backdrop-filter:blur(8px);border:1px solid var(--line);
-    border-radius:14px;padding:10px 16px;display:flex;flex-direction:column;line-height:1}
-  .countbox .n{font-size:42px;font-weight:800;letter-spacing:1px}
+  .countbox{background:var(--glass);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.6);
+    border-radius:14px;padding:10px 16px;display:flex;flex-direction:column;line-height:1;
+    box-shadow:var(--shadow-lg);color:var(--txt)}
+  .countbox .n{font-size:42px;font-weight:800;letter-spacing:1px;color:var(--accent)}
   .countbox .lbl{font-size:11px;color:var(--muted);margin-top:4px}
-  .status-pill{margin-left:auto;background:rgba(7,12,22,.72);backdrop-filter:blur(8px);
-    border:1px solid var(--line);border-radius:999px;padding:7px 12px;display:flex;align-items:center;
-    gap:7px;font-size:12px;pointer-events:auto}
+  .status-pill{margin-left:auto;background:var(--glass);backdrop-filter:blur(10px);
+    border:1px solid rgba(255,255,255,.6);border-radius:999px;padding:7px 12px;display:flex;align-items:center;
+    gap:7px;font-size:12px;pointer-events:auto;box-shadow:var(--shadow-lg);color:var(--txt)}
   .dot{width:10px;height:10px;border-radius:50%;background:var(--muted);transition:.2s}
   .dot.ok{background:var(--ok);box-shadow:0 0 8px var(--ok)}
   .dot.warn{background:var(--warn);box-shadow:0 0 8px var(--warn)}
 
   /* target chip — which part is being counted */
   .target-chip{position:absolute;top:84px;left:14px;z-index:6;display:flex;align-items:center;gap:8px;
-    background:rgba(7,12,22,.78);backdrop-filter:blur(8px);border:1px solid var(--warn);
-    border-radius:999px;padding:6px 8px 6px 10px;font-size:13px}
-  .target-chip .swatch{width:18px;height:18px;border-radius:5px;border:1px solid rgba(255,255,255,.5);flex:none}
-  .target-chip .clear-x{background:rgba(255,255,255,.12);border-radius:50%;width:22px;height:22px;
+    background:var(--glass);backdrop-filter:blur(10px);border:1.5px solid var(--warn);color:var(--txt);
+    border-radius:999px;padding:6px 8px 6px 10px;font-size:13px;font-weight:600;box-shadow:var(--shadow-lg)}
+  .target-chip .swatch{width:18px;height:18px;border-radius:5px;border:1px solid rgba(15,23,42,.25);flex:none}
+  .target-chip .clear-x{background:rgba(15,23,42,.08);color:var(--muted);border-radius:50%;width:22px;height:22px;
     display:grid;place-items:center;font-size:12px;line-height:1}
-  .cbtn.on{background:var(--accent);border-color:var(--accent)}
+  .cbtn.on{background:var(--accent);border-color:var(--accent);color:#fff}
 
   /* bottom controls */
-  .controls{position:absolute;left:0;right:0;bottom:0;padding:12px 14px calc(12px + var(--safe-b));
-    background:linear-gradient(0deg,rgba(7,12,22,.92),rgba(7,12,22,0));z-index:6}
+  .controls{position:absolute;left:0;right:0;bottom:0;padding:14px 14px calc(14px + var(--safe-b));
+    background:linear-gradient(0deg,rgba(241,245,251,.96) 60%,rgba(241,245,251,0));z-index:6}
   .sliders{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
   .slider-row{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted)}
   .slider-row label{width:78px;flex:none}
@@ -95,18 +101,18 @@
   .btn-row{display:flex;gap:10px;align-items:center;justify-content:center}
   .cbtn{background:var(--panel);border:1px solid var(--line);border-radius:14px;
     padding:12px;font-size:13px;display:flex;flex-direction:column;align-items:center;gap:3px;
-    min-width:64px}
+    min-width:64px;box-shadow:var(--shadow);color:var(--txt)}
   .cbtn .i{font-size:20px}
   .cbtn:active{background:var(--panel2)}
-  .cbtn.primary{background:var(--accent);border-color:var(--accent)}
-  .shutter{width:70px;height:70px;border-radius:50%;background:#fff;border:5px solid rgba(255,255,255,.35);
-    flex:none}
+  .cbtn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .shutter{width:70px;height:70px;border-radius:50%;background:#fff;border:4px solid var(--accent);
+    flex:none;box-shadow:var(--shadow-lg)}
   .shutter:active{transform:scale(.92)}
 
   /* fab back */
-  .topbtn{position:absolute;z-index:8;background:rgba(7,12,22,.7);backdrop-filter:blur(8px);
-    border:1px solid var(--line);border-radius:12px;padding:9px 12px;font-size:13px;display:flex;
-    align-items:center;gap:6px}
+  .topbtn{position:absolute;z-index:8;background:var(--glass);backdrop-filter:blur(10px);color:var(--txt);
+    border:1px solid rgba(255,255,255,.6);border-radius:12px;padding:9px 12px;font-size:13px;display:flex;
+    align-items:center;gap:6px;box-shadow:var(--shadow)}
   .topbtn.back{top:14px;left:14px}
 
   /* ---------- Annotate ---------- */
@@ -128,13 +134,14 @@
   .btn{flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:13px;
     padding:14px;font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px}
   .btn:active{transform:scale(.99)}
-  .btn.primary{background:var(--accent);border-color:var(--accent)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:var(--shadow)}
   .btn.ghost{flex:0 0 auto;padding:14px 16px}
   .btn:disabled{opacity:.45}
 
   /* ---------- Results ---------- */
-  .result-head{padding:18px 16px;text-align:center;background:var(--panel);border-bottom:1px solid var(--line)}
-  .result-head .big{font-size:64px;font-weight:800;line-height:1;letter-spacing:1px}
+  .result-head{padding:18px 16px;text-align:center;background:var(--panel);border-bottom:1px solid var(--line);
+    box-shadow:var(--shadow)}
+  .result-head .big{font-size:64px;font-weight:800;line-height:1;letter-spacing:1px;color:var(--accent)}
   .result-head .big small{font-size:18px;color:var(--muted);font-weight:500}
   .result-head .meta{margin-top:8px;font-size:12px;color:var(--muted)}
   .conf{display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-size:12px}
@@ -144,8 +151,8 @@
 
   /* ---------- Library ---------- */
   .lib-item{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px;
-    display:flex;gap:12px;align-items:center;margin-bottom:10px}
-  .lib-item img{width:56px;height:56px;border-radius:10px;object-fit:cover;background:#000;flex:none}
+    display:flex;gap:12px;align-items:center;margin-bottom:10px;box-shadow:var(--shadow)}
+  .lib-item img{width:56px;height:56px;border-radius:10px;object-fit:cover;background:var(--stage);flex:none}
   .lib-item .info{flex:1;min-width:0}
   .lib-item .info h4{margin:0 0 3px;font-size:14px}
   .lib-item .info p{margin:0;font-size:11px;color:var(--muted)}
@@ -154,21 +161,22 @@
 
   /* ---------- toast / loading ---------- */
   .toast{position:fixed;left:50%;bottom:calc(30px + var(--safe-b));transform:translateX(-50%);
-    background:#0a1426;border:1px solid var(--line);border-radius:12px;padding:12px 18px;font-size:13px;
-    z-index:100;opacity:0;transition:.25s;pointer-events:none;max-width:88%;text-align:center}
+    background:var(--txt);color:#fff;border-radius:12px;padding:12px 18px;font-size:13px;
+    z-index:100;opacity:0;transition:.25s;pointer-events:none;max-width:88%;text-align:center;
+    box-shadow:var(--shadow-lg)}
   .toast.show{opacity:1}
-  .loading{position:fixed;inset:0;background:rgba(5,9,18,.86);backdrop-filter:blur(4px);z-index:90;
+  .loading{position:fixed;inset:0;background:rgba(238,242,249,.88);backdrop-filter:blur(4px);z-index:90;
     display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px}
   .loading.show{display:flex}
-  .spinner{width:46px;height:46px;border:4px solid var(--line);border-top-color:var(--accent2);
+  .spinner{width:46px;height:46px;border:4px solid var(--line);border-top-color:var(--accent);
     border-radius:50%;animation:spin 1s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
   .loading p{color:var(--muted);font-size:13px}
 
   /* opencv banner */
   .cvbanner{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:9;
-    background:rgba(7,12,22,.85);border:1px solid var(--line);border-radius:10px;padding:8px 14px;
-    font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:center}
+    background:var(--glass);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.6);border-radius:10px;
+    padding:8px 14px;font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:center;box-shadow:var(--shadow)}
 </style>
 </head>
 <body>
@@ -299,7 +307,7 @@
       </div>
       <div class="meta" id="resMeta"></div>
     </div>
-    <div class="stage" style="background:#0b1220">
+    <div class="stage">
       <canvas id="resCanvas" class="draw-canvas"></canvas>
     </div>
     <div class="edit-hint">แตะที่รูป: เพิ่มจุดที่ตกหล่น (+1) · แตะที่จุดเดิมเพื่อลบ (−1)</div>
