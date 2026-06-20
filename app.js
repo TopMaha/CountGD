@@ -21,9 +21,14 @@ const App = (() => {
   let stream = null;
   let facing = 'environment';
   let rafId = null;
-  let liveTarget = null;         // {h,s,v,isGray,areaFrac} — set by tapping a part
+  let liveTarget = null;         // {h,s,v,isGray,areaFrac,shape} — set by tapping or scanning a part
   let countAll = false;          // fallback: count every contrasting blob
   let lastTapDisp = null;        // {x,y} in display coords for the target marker
+  let scanMode = false;          // true while aiming at a single reference part to learn it
+  let template = null;           // the learned reference signature (color+shape+size+thumb)
+
+  // centre guide box used when scanning a reference part (matches .scan-guide CSS)
+  const GUIDE = { x: 0.18, y: 0.24, w: 0.64, h: 0.52 };
 
   // live smoothing / motion
   let countBuf = [];
@@ -79,16 +84,40 @@ const App = (() => {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     $('screen-' + id).classList.add('active');
   }
-  function backToHome() { stopLive(); show('home'); $('modeTag').textContent = 'นับชิ้นงาน · on-device'; }
+  function backToHome() { stopLive(); scanMode = false; show('home'); $('modeTag').textContent = 'นับชิ้นงาน · on-device'; }
   function exitLive() { backToHome(); }
 
   /* ================================================================
      LIVE CAMERA  (Phase 1-2)
      ================================================================ */
   async function openLive() {
+    scanMode = false;
     show('live');
     $('modeTag').textContent = 'กล้องสด · realtime';
     await startCamera();
+    applyScanUI();
+  }
+
+  // open the camera aimed at learning ONE reference part
+  async function openScan() {
+    scanMode = true;
+    liveTarget = null; countAll = false; lastTapDisp = null; countBuf = [];
+    show('live');
+    $('modeTag').textContent = 'สแกนชิ้นงานต้นแบบ';
+    await startCamera();
+    applyScanUI();
+  }
+
+  // show/hide scan-mode chrome vs normal counting chrome on the live screen
+  function applyScanUI() {
+    const on = scanMode;
+    $('scanGuide').classList.toggle('hidden', !on);
+    $('scanHint').classList.toggle('hidden', !on);
+    $('scanAction').classList.toggle('hidden', !on);
+    document.querySelector('#screen-live .controls').classList.toggle('hidden', on);
+    document.querySelector('#screen-live .hud').classList.toggle('hidden', on);
+    $('saveTplBtn').classList.toggle('hidden', on || !template);
+    if (!on) updateTargetUI();
   }
 
   async function startCamera() {
@@ -244,6 +273,7 @@ const App = (() => {
 
   function updateStatus(still, active) {
     const dot = $('liveDot'), st = $('liveStatus');
+    if (scanMode) return;          // scan mode shows its own hint, not the count status
     if (!cvReady) { dot.className = 'dot'; st.textContent = 'กำลังโหลดเครื่องนับ…'; return; }
     if (!active) { dot.className = 'dot'; st.textContent = 'แตะที่ชิ้นงานที่จะนับ'; return; }
     if (still) { dot.className = 'dot ok'; st.textContent = 'ภาพนิ่ง · พร้อมยืนยัน'; }
@@ -307,8 +337,9 @@ const App = (() => {
   }
 
   function clearTarget() {
-    liveTarget = null; lastTapDisp = null; countAll = false;
+    liveTarget = null; lastTapDisp = null; countAll = false; template = null;
     countBuf = []; updateTargetUI();
+    const b = $('saveTplBtn'); if (b) b.classList.add('hidden');
   }
 
   function updateTargetUI() {
@@ -320,7 +351,8 @@ const App = (() => {
       chip.classList.remove('hidden');
       const rgb = hsvToRgb(liveTarget.h, liveTarget.s, liveTarget.v);
       sw.style.background = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
-      $('targetLabel').textContent = liveTarget.isGray ? 'นับชิ้นโทนนี้' : 'นับชิ้นสีนี้';
+      $('targetLabel').textContent = liveTarget.shape ? 'นับตามต้นแบบ (รูปร่าง+สี)'
+        : (liveTarget.isGray ? 'นับชิ้นโทนนี้' : 'นับชิ้นสีนี้');
     } else if (countAll) {
       chip.classList.remove('hidden');
       sw.style.background = 'repeating-linear-gradient(45deg,#888,#888 4px,#bbb 4px,#bbb 8px)';
@@ -332,6 +364,7 @@ const App = (() => {
 
   // tap a part → sample its color and measure its blob size → count similar parts
   function onLiveTap(e) {
+    if (scanMode) return;          // taps are disabled while aiming at the reference part
     if (!cvReady) { toast('กำลังโหลดเครื่องนับ รอสักครู่'); return; }
     const v = $('liveVideo'), o = $('liveOverlay');
     const rect = o.getBoundingClientRect();
@@ -372,6 +405,104 @@ const App = (() => {
 
     countBuf = []; updateTargetUI();
     toast('เลือกแล้ว — นับเฉพาะชิ้นที่เหมือน (แตะใหม่เพื่อเปลี่ยน)');
+  }
+
+  /* ----------------------------------------------------------------
+     Scan a single reference part inside the centre guide box and learn
+     its signature: colour (HSV) + shape (aspect ratio, fill) + size.
+     That signature drives the counter so it counts ONLY this part.
+     ---------------------------------------------------------------- */
+  function scanPart() {
+    const v = $('liveVideo');
+    if (!cvReady) { toast('กำลังโหลดเครื่องนับ รอสักครู่'); return; }
+    if (!v.videoWidth) { toast('กล้องยังไม่พร้อม'); return; }
+    // capture at processing resolution
+    const pw = CONFIG.LIVE_PROC_WIDTH;
+    const ph = Math.round(pw * v.videoHeight / v.videoWidth);
+    proc.width = pw; proc.height = ph;
+    procCtx.drawImage(v, 0, 0, pw, ph);
+
+    const gx = Math.round(GUIDE.x * pw), gy = Math.round(GUIDE.y * ph);
+    const gw = Math.round(GUIDE.w * pw), gh = Math.round(GUIDE.h * ph);
+
+    let sig = null;
+    try {
+      let src = cv.matFromImageData(procCtx.getImageData(0, 0, pw, ph));
+      sig = segmentSignature(src, gx, gy, gw, gh, pw, ph);
+      src.delete();
+    } catch (e) { /* fall through to error toast */ }
+
+    if (!sig) { toast('ไม่พบชิ้นงานในกรอบ — วางให้ชัด พื้นหลังตัดกัน แล้วลองใหม่'); return; }
+
+    liveTarget = {
+      h: sig.h, s: sig.s, v: sig.v, isGray: sig.s < 45,
+      areaFrac: sig.areaFrac,
+      // shape gate learned from the reference silhouette
+      shape: {
+        arLo: sig.ar * 0.6, arHi: sig.ar * 1.7,
+        extLo: Math.max(0.12, sig.ext - 0.22), extHi: 1.0,
+      },
+    };
+    template = { sig, thumb: thumbFromGuide(gx, gy, gw, gh), created: Date.now() };
+    countAll = false; lastTapDisp = null; scanMode = false; countBuf = [];
+    applyScanUI();
+    updateTargetUI();
+    $('saveTplBtn').classList.remove('hidden');
+    toast('เรียนรูปร่าง+สีของชิ้นงานแล้ว — กำลังนับเฉพาะชิ้นที่เหมือน');
+  }
+
+  // segment the dominant part touching the centre of the guide box → signature
+  function segmentSignature(src, gx, gy, gw, gh, fw, fh) {
+    const x = clamp(gx, 0, src.cols - 2), y = clamp(gy, 0, src.rows - 2);
+    const w = clamp(gw, 1, src.cols - x), h = clamp(gh, 1, src.rows - y);
+    let sub = src.roi(new cv.Rect(x, y, w, h));
+    let gray = new cv.Mat(), bin = new cv.Mat();
+    cv.cvtColor(sub, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
+    cv.threshold(gray, bin, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    if (bin.ucharPtr(h >> 1, w >> 1)[0] === 0) cv.bitwise_not(bin, bin);
+    let k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
+    cv.morphologyEx(bin, bin, cv.MORPH_OPEN, k);
+    cv.morphologyEx(bin, bin, cv.MORPH_CLOSE, k);
+    k.delete();
+
+    let cs = new cv.MatVector(), hi = new cv.Mat();
+    cv.findContours(bin, cs, hi, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    let best = null, bestA = 0;
+    for (let i = 0; i < cs.size(); i++) {
+      const c = cs.get(i), a = cv.contourArea(c);
+      if (a > bestA && a > w * h * 0.02) { if (best) best.delete(); best = c; bestA = a; }
+      else c.delete();
+    }
+    let out = null;
+    if (best) {
+      const r = cv.boundingRect(best);
+      let m = cv.Mat.zeros(h, w, cv.CV_8UC1);
+      let mv = new cv.MatVector(); mv.push_back(best);
+      cv.drawContours(m, mv, 0, new cv.Scalar(255), -1);
+      let hsv = new cv.Mat();
+      cv.cvtColor(sub, hsv, cv.COLOR_RGBA2RGB);
+      cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
+      const mn = cv.mean(hsv, m);
+      out = {
+        h: mn[0], s: mn[1], v: mn[2],
+        ar: r.width / Math.max(1, r.height),
+        ext: bestA / Math.max(1, r.width * r.height),
+        areaFrac: bestA / (fw * fh),
+      };
+      m.delete(); mv.delete(); hsv.delete(); best.delete();
+    }
+    sub.delete(); gray.delete(); bin.delete(); cs.delete(); hi.delete();
+    return out;
+  }
+
+  // small thumbnail of the guide region, for the library card
+  function thumbFromGuide(gx, gy, gw, gh) {
+    const t = document.createElement('canvas'); t.width = 120; t.height = 120;
+    const s = Math.min(120 / gw, 120 / gh);
+    t.getContext('2d').drawImage(proc, gx, gy, gw, gh,
+      (120 - gw * s) / 2, (120 - gh * s) / 2, gw * s, gh * s);
+    return t.toDataURL('image/jpeg', 0.6);
   }
 
   /* ================================================================
@@ -539,7 +670,8 @@ const App = (() => {
       detections,
       count: detections.length,
       confidence: estimateConfidence(detections, params),
-      source: exemplars.length ? 'รูปร่าง+สี (on-device)' : 'แยกชิ้น (on-device)',
+      source: exemplars.length ? 'รูปร่าง+สี (on-device)'
+        : (liveTarget && liveTarget.shape ? 'ต้นแบบสแกน (on-device)' : 'แยกชิ้น (on-device)'),
       params,
     };
   }
@@ -562,6 +694,7 @@ const App = (() => {
         maxArea: a ? a * 3.0 : px * 0.02,
         useColor: true, color: { h: liveTarget.h, s: liveTarget.s, v: liveTarget.v },
         hsv: { lo, hi },
+        shape: liveTarget.shape || null,   // scanned reference → filter by shape too
       };
     }
     if (!exemplars.length) {
@@ -760,8 +893,10 @@ const App = (() => {
       k.delete(); gray.delete();
       minArea = +$('sMin').value; maxArea = +$('sMax').value;
     }
-    // split touching parts so live mode also counts pieces, not merged color blobs
-    const dets = splitParts(src, mask, minArea, maxArea, null);
+    // split touching parts + apply the scanned shape gate (if any) so live mode
+    // counts pieces matching the reference part, not just merged color blobs
+    const shape = liveTarget ? (liveTarget.shape || null) : null;
+    const dets = splitParts(src, mask, minArea, maxArea, shape);
     src.delete(); mask.delete();
     return dedup(dets);
   }
@@ -921,22 +1056,63 @@ const App = (() => {
     renderLibrary();
   }
 
+  // save the currently scanned reference part so it can be reused later
+  function saveTemplate() {
+    if (!template) { toast('ยังไม่มีต้นแบบ — สแกนชิ้นงานก่อน'); return; }
+    const name = prompt('ชื่อชนิดชิ้นงาน:') || 'ชิ้นงาน';
+    const items = lib();
+    items.unshift({
+      id: 't' + Date.now(), name, kind: 'template',
+      thumb: template.thumb, signature: template.sig, created: Date.now(),
+    });
+    setLib(items.slice(0, 50));
+    toast('บันทึกต้นแบบลงคลังแล้ว: ' + name);
+  }
+
+  // re-activate a saved template and jump straight into live counting
+  async function useTemplate(id) {
+    const it = lib().find(x => x.id === id);
+    if (!it || !it.signature) return;
+    const s = it.signature;
+    liveTarget = {
+      h: s.h, s: s.s, v: s.v, isGray: s.s < 45, areaFrac: s.areaFrac,
+      shape: { arLo: s.ar * 0.6, arHi: s.ar * 1.7, extLo: Math.max(0.12, s.ext - 0.22), extHi: 1.0 },
+    };
+    template = { sig: s, thumb: it.thumb, created: it.created };
+    countAll = false; lastTapDisp = null; scanMode = false; countBuf = [];
+    show('live');
+    $('modeTag').textContent = 'นับด้วยต้นแบบ: ' + it.name;
+    await startCamera();
+    applyScanUI();
+    updateTargetUI();
+    toast('ใช้ต้นแบบ: ' + it.name + ' — เล็งกล้องที่กองชิ้นงาน');
+  }
+
   function openLibrary() { show('library'); $('modeTag').textContent = 'คลังชิ้นงาน'; renderLibrary(); }
 
   function renderLibrary() {
     const list = $('libList'); if (!list) return;
     const items = lib();
-    if (!items.length) { list.innerHTML = '<div class="empty">ยังไม่มีชิ้นงานบันทึกไว้<br>นับแล้วกด 💾 บันทึก เพื่อใช้ซ้ำครั้งหน้า</div>'; return; }
-    list.innerHTML = items.map(it => `
+    if (!items.length) { list.innerHTML = '<div class="empty">ยังไม่มีชิ้นงานบันทึกไว้<br>สแกนชิ้นงานแล้วกด 💾 บันทึกต้นแบบ เพื่อใช้ซ้ำครั้งหน้า</div>'; return; }
+    list.innerHTML = items.map(it => {
+      const isTpl = it.kind === 'template';
+      const desc = isTpl
+        ? 'ต้นแบบสแกน (รูปร่าง+สี)'
+        : `${(it.exemplars || []).length} กรอบตัวอย่าง · นับล่าสุด ${it.count ?? '—'} ชิ้น`;
+      const useBtn = isTpl
+        ? `<button class="use" onclick="App.useTemplate('${it.id}')">▶︎ ใช้</button>` : '';
+      return `
       <div class="lib-item">
         <img src="${it.thumb}" alt="">
         <div class="info">
           <h4>${escapeHtml(it.name)}</h4>
-          <p>${it.exemplars.length} กรอบตัวอย่าง · นับล่าสุด ${it.count} ชิ้น</p>
+          <p>${desc}</p>
           <p>${new Date(it.created).toLocaleDateString('th-TH')}</p>
         </div>
+        ${useBtn}
         <button class="del" onclick="App.deleteLib('${it.id}')">🗑️</button>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   }
   function deleteLib(id) { setLib(lib().filter(x => x.id !== id)); renderLibrary(); }
 
@@ -999,6 +1175,7 @@ const App = (() => {
   return {
     onCvLoad, onCvError, openLive, exitLive, flipCamera, toggleLiveSliders,
     toggleCountAll, clearTarget,
+    openScan, scanPart, saveTemplate, useTemplate,
     verifyLive, openSnapshot, backToHome, setTool, clearExemplars, runCount,
     exportResult, saveToLibrary, openLibrary, deleteLib,
   };

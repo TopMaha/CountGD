@@ -114,6 +114,22 @@
     border:1px solid rgba(255,255,255,.6);border-radius:12px;padding:9px 12px;font-size:13px;display:flex;
     align-items:center;gap:6px;box-shadow:var(--shadow)}
   .topbtn.back{top:14px;left:14px}
+  .topbtn.savetpl{top:14px;right:14px}
+
+  /* ---------- Scan reference part ---------- */
+  .scan-guide{position:absolute;left:18%;top:24%;width:64%;height:52%;
+    border:2.5px dashed var(--accent);border-radius:16px;
+    box-shadow:0 0 0 9999px rgba(15,23,42,.30);pointer-events:none;z-index:6}
+  .scan-hint{position:absolute;top:84px;left:50%;transform:translateX(-50%);z-index:7;
+    background:var(--glass);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.6);
+    border-radius:10px;padding:9px 14px;font-size:12.5px;color:var(--txt);text-align:center;
+    max-width:84%;line-height:1.4;box-shadow:var(--shadow)}
+  .scan-hint b{color:var(--accent)}
+  .scan-action{position:absolute;left:0;right:0;bottom:calc(22px + var(--safe-b));z-index:7;
+    display:flex;justify-content:center}
+  .scan-action button{background:var(--accent);color:#fff;border-radius:16px;padding:15px 26px;
+    font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px;box-shadow:var(--shadow-lg)}
+  .scan-action button:active{transform:scale(.96)}
 
   /* ---------- Annotate ---------- */
   .annotate-bar{padding:12px 14px;background:var(--panel);border-bottom:1px solid var(--line);
@@ -156,6 +172,9 @@
   .lib-item .info{flex:1;min-width:0}
   .lib-item .info h4{margin:0 0 3px;font-size:14px}
   .lib-item .info p{margin:0;font-size:11px;color:var(--muted)}
+  .lib-item .use{background:var(--accent);color:#fff;border-radius:10px;padding:9px 12px;font-size:13px;
+    font-weight:600;flex:none;box-shadow:var(--shadow)}
+  .lib-item .use:active{transform:scale(.96)}
   .lib-item .del{background:none;color:var(--bad);font-size:18px;padding:8px}
   .empty{text-align:center;color:var(--muted);padding:40px 20px;font-size:13px}
 
@@ -200,6 +219,11 @@
           <div><h3>กล้องสด</h3><p>เล็งกล้อง → เห็นเลขนับทันที realtime ไม่ต้องกดถ่าย</p></div>
           <div class="chev">›</div>
         </button>
+        <button class="card" onclick="App.openScan()">
+          <div class="ic">🎯</div>
+          <div><h3>สแกนชิ้นงานต้นแบบ</h3><p>เล็งชิ้นงาน 1 ชิ้นในกรอบ → ระบบเรียนรูปร่าง+สี → นับเฉพาะชิ้นที่เหมือน</p></div>
+          <div class="chev">›</div>
+        </button>
         <button class="card" onclick="App.openSnapshot()">
           <div class="ic">📸</div>
           <div><h3>ถ่ายรูป / อัปโหลด</h3><p>ถ่ายหรือเลือกรูป → วาดกรอบตัวอย่าง → นับแม่นสูงสุด</p></div>
@@ -222,6 +246,14 @@
       <canvas id="liveOverlay" class="overlay-canvas"></canvas>
 
       <button class="topbtn back" onclick="App.exitLive()">‹ กลับ</button>
+      <button class="topbtn savetpl hidden" id="saveTplBtn" onclick="App.saveTemplate()">💾 บันทึกต้นแบบ</button>
+
+      <!-- scan-a-reference-part mode -->
+      <div class="scan-guide hidden" id="scanGuide"></div>
+      <div class="scan-hint hidden" id="scanHint">วางชิ้นงาน <b>1 ชิ้น</b> ให้อยู่กลางกรอบ พื้นหลังสีตัดกัน แล้วกดสแกน</div>
+      <div class="scan-action hidden" id="scanAction">
+        <button onclick="App.scanPart()"><span style="font-size:18px">🎯</span> สแกนชิ้นนี้</button>
+      </div>
 
       <div class="hud">
         <div class="countbox">
